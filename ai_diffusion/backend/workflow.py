@@ -454,6 +454,17 @@ class Conditioning:
     def language(self):
         return self.positive.language
 
+    @property
+    def has_native_latent(self) -> bool:
+        return self.qwen21_latent is not None
+
+    def native_latent(self) -> Output:
+        assert self.qwen21_latent is not None
+        return self.qwen21_latent
+
+    def native_latent_or(self, fallback: Output) -> Output:
+        return self.qwen21_latent or fallback
+
 
 def downscale_control_images(
     control_layers: list[Control] | list[ControlInput], original: Extent, target: Extent
@@ -485,19 +496,11 @@ def encode_prompt(
     image: Output | None = None,
     vae: Output | None = None,
 ):
+    if clip.arch is Arch.qwen21:
+        return _encode_qwen_image21_prompt(w, cond, clip, image, vae)
+
     ref_images = [image] if image is not None else []
     ref_images += [c.image.load(w) for c in cond.all_control if c.mode.is_ip_adapter]
-
-    if clip.arch is Arch.qwen21:
-        assert vae is not None
-        assert len(cond.regions) <= 1, "Qwen Image 2.1 does not support regional prompts"
-        positive = cond.positive.prepare(w, cond.style_prompt)
-        negative = cond.negative.prepare(w) if cond.negative else ""
-        prompt, latent = w.text_encode_qwen_image21(
-            clip.model, vae, ref_images, positive, negative
-        )
-        cond.qwen21_latent = latent if len(ref_images) > 0 else None
-        return prompt
 
     if len(cond.regions) <= 1 or all(len(r.loras) == 0 for r in cond.regions):
         positive = cond.positive.encode(w, clip, cond.style_prompt, ref_images)
@@ -523,6 +526,26 @@ def encode_prompt(
 
     assert positive is not None and negative is not None
     return ConditioningOutput(positive, negative)
+
+
+def _encode_qwen_image21_prompt(
+    w: ComfyWorkflow,
+    cond: Conditioning,
+    clip: Clip,
+    image: Output | None,
+    vae: Output | None,
+):
+    assert vae is not None
+    assert len(cond.regions) <= 1, "Qwen Image 2.1 does not support regional prompts"
+    ref_images = [image] if image is not None else []
+    ref_images += [c.image.load(w) for c in cond.all_control if c.mode.is_ip_adapter]
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    negative = cond.negative.prepare(w) if cond.negative else ""
+    prompt, latent = w.text_encode_qwen_image21(
+        clip.model, vae, ref_images, positive, negative
+    )
+    cond.qwen21_latent = latent if ref_images else None
+    return prompt
 
 
 def apply_attention_mask(
@@ -854,8 +877,7 @@ def scale_refine_and_decode(
     params = _sampler_params(sampling, extent.desired, strength=0.4)
 
     prompt = encode_prompt(w, cond, clip, regions, upscale, vae)
-    if cond.qwen21_latent:
-        latent = cond.qwen21_latent
+    latent = cond.native_latent_or(latent)
     model, prompt = apply_control(w, model, prompt, cond.all_control, extent.desired, vae, models)
     prompt = apply_reference_conditioning(w, prompt, upscale, latent, cond, vae, arch, tiled_vae)
     result = w.sampler_custom_advanced(model, prompt, latent, arch, **params)
@@ -892,8 +914,8 @@ def generate(
     model = apply_regional_ip_adapter(w, model, cond.regions, extent.initial, models)
     latent = w.empty_latent_image(extent.initial, models.arch, misc.batch_count)
     prompt = encode_prompt(w, cond, clip, regions, vae=vae)
-    if cond.qwen21_latent:
-        latent = w.batch_latent(cond.qwen21_latent, misc.batch_count)
+    if cond.has_native_latent:
+        latent = w.batch_latent(cond.native_latent(), misc.batch_count)
     model, prompt = apply_control(w, model, prompt, cond.all_control, extent.initial, vae, models)
     prompt = apply_reference_conditioning(
         w, prompt, None, None, cond, vae, models.arch, checkpoint.tiled_vae
@@ -1082,8 +1104,7 @@ def inpaint(
     )
 
     if models.arch is Arch.qwen21:
-        assert cond_base.qwen21_latent is not None
-        latent = cond_base.qwen21_latent
+        latent = cond_base.native_latent()
         inpaint_model = model
     elif params.use_inpaint_model and models.arch is Arch.sdxl:
         prompt, latent_inpaint, latent = w.vae_encode_inpaint_conditioning(
@@ -1189,8 +1210,7 @@ def refine(
     in_image = scale_to_initial(extent, w, in_image, models)
     latent = vae_encode(w, vae, in_image, checkpoint.tiled_vae)
     prompt = encode_prompt(w, cond, clip, regions, in_image, vae)
-    if cond.qwen21_latent:
-        latent = cond.qwen21_latent
+    latent = cond.native_latent_or(latent)
     latent_batch = w.batch_latent(latent, misc.batch_count)
     latent_batch = setup_latent_layers(w, latent_batch, extent.desired, misc.layer_count)
     model, prompt = apply_control(w, model, prompt, cond.all_control, extent.desired, vae, models)
@@ -1238,8 +1258,7 @@ def refine_region(
         cond.control.append(inpaint_control(in_image, initial_mask, models.arch))
     model, prompt = apply_control(w, model, prompt, cond.all_control, extent.initial, vae, models)
     if models.arch is Arch.qwen21:
-        assert cond.qwen21_latent is not None
-        latent = cond.qwen21_latent
+        latent = cond.native_latent()
         inpaint_model = model
     elif inpaint.use_inpaint_model and models.arch is Arch.sdxl:
         prompt, latent_inpaint, latent = w.vae_encode_inpaint_conditioning(
@@ -1426,8 +1445,8 @@ def upscale_tiled(
         tile_model, prompt = apply_control(w, tile_model, prompt, control, no_reshape, vae, models)
 
         latent = vae_encode(w, vae, tile_image, checkpoint.tiled_vae)
-        if tile_cond.qwen21_latent:
-            latent = tile_cond.qwen21_latent
+        if tile_cond.has_native_latent:
+            latent = tile_cond.native_latent()
         else:
             latent = w.set_latent_noise_mask(latent, tile_mask)
         prompt = apply_reference_conditioning(

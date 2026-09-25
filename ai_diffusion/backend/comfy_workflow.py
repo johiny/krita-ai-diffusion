@@ -705,6 +705,8 @@ class ComfyWorkflow:
         negative_prompt: str | Output,
         resolution=1024,
     ):
+        if len(images) > 16:
+            raise ValueError("Qwen Image 2.1 supports at most 16 reference images")
         image_inputs = {f"images.image_{index}": image for index, image in enumerate(images, 1)}
         positive, negative, latent = self.add(
             "TextEncodeQwenImage21",
