@@ -191,7 +191,7 @@ def prepare_diffusion_input(
     desired = apply_resolution_settings(extent, perf)
 
     # The checkpoint may require a different resolution than what is requested.
-    if arch.is_edit:
+    if arch.is_edit or arch is Arch.qwen21:
         downscale = False  # Never use 2-pass generation for edit models
 
     min_size, max_size, min_scale, max_scale = CheckpointResolution.compute(

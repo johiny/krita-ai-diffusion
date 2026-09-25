@@ -584,6 +584,8 @@ class ComfyWorkflow:
 
     def empty_latent_image(self, extent: Extent, arch: Arch, batch_size=1):
         w, h = extent.width, extent.height
+        if arch is Arch.qwen21:
+            return self.add("EmptyLatentImage", 1, width=w, height=h, batch_size=batch_size)
         if arch.is_flux_like or arch.is_qwen_like or arch in (Arch.sd3, Arch.chroma, Arch.zimage):
             return self.add("EmptySD3LatentImage", 1, width=w, height=h, batch_size=batch_size)
         if arch.is_flux2 or arch is Arch.ernie:
@@ -693,6 +695,28 @@ class ComfyWorkflow:
             image3=image3,
             prompt=prompt,
         )
+
+    def text_encode_qwen_image21(
+        self,
+        clip: Output,
+        vae: Output,
+        images: list[Output],
+        prompt: str | Output,
+        negative_prompt: str | Output,
+        resolution=1024,
+    ):
+        image_inputs = {f"images.image_{index}": image for index, image in enumerate(images, 1)}
+        positive, negative, latent = self.add(
+            "TextEncodeQwenImage21",
+            3,
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            resolution=resolution,
+            **image_inputs,
+        )
+        return ConditioningOutput(positive, negative), latent
 
     def background_region(self, conditioning: Output):
         return self.add("ETN_BackgroundRegion", 1, conditioning=conditioning)

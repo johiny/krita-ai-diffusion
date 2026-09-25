@@ -52,6 +52,7 @@ The Krita Plugin currently supports the following edit model architectures:
 * Flux Kontext
 * Flux 2 Klein _(experimental)_
 * Qwen Image Edit _(experimental)_
+* Qwen Image 2.1 _(experimental)_
 
 ### How to Use Edit Models
 This section uses the _Flux Kontext_ model as an example. The steps are the same
@@ -127,7 +128,8 @@ this way, but each will significantly increase memory usage and processing time.
 To reference input images in your instructions it is best to succinctly describe
 their content. For latest _Qwen Image Edit_ models you can use "Picture 1" for
 the main canvas, and "Picture 2", "Picture 3", etc. for additional reference
-images, in the order they are listed in the UI.
+images, in the order they are listed in the UI. For _Qwen Image 2.1_, use
+`<image1>`, `<image2>`, etc.
 
 
 ### Linking Edit Styles

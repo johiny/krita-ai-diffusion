@@ -10,10 +10,10 @@ from typing import Any, NamedTuple
 
 # Version identifier for all the resources defined here. This is used as the server version.
 # It usually follows the plugin version, but not all new plugin versions also require a server update.
-version = "1.53.0"
+version = "1.54.0"
 
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
-comfy_version = "4da9e2dbead52fc1e68beae33fe3d7ad63b63241"
+comfy_version = "b5cc8830279eae909a59de030af1e50761c36751"
 
 
 class CustomNode(NamedTuple):
@@ -88,6 +88,7 @@ class Arch(Enum):
     qwen_e = "Qwen Edit"
     qwen_e_p = "Qwen Edit Plus"
     qwen_l = "Qwen Layered"
+    qwen21 = "Qwen Image 2.1"
     anima = "Anima"
     zimage = "Z-Image"
     ernie = "ERNIE Image"
@@ -121,6 +122,8 @@ class Arch(Enum):
             return Arch.illu_v
         if string == "chroma":
             return Arch.chroma
+        if string in {"qwen-image-2.1", "qwen_image21"} or "qwen_image_2.1" in filename:
+            return Arch.qwen21
         if string == "qwen-image" and "edit" in filename:
             if "2509" in filename or "2511" in filename:
                 return Arch.qwen_e_p
@@ -201,7 +204,7 @@ class Arch(Enum):
 
     @property
     def supports_edit(self):  # includes text-to-image models that can also edit
-        return self.is_edit or self.is_flux2
+        return self.is_edit or self.is_flux2 or self is Arch.qwen21
 
     @property
     def is_sdxl_like(self):
@@ -239,6 +242,8 @@ class Arch(Enum):
                 return ["t5"]
             case Arch.qwen | Arch.qwen_e | Arch.qwen_e_p | Arch.qwen_l:
                 return ["qwen"]
+            case Arch.qwen21:
+                return ["qwen_3vl_8b"]
             case Arch.anima:
                 return ["qwen_3_06b"]
             case Arch.zimage:
@@ -267,6 +272,7 @@ class Arch(Enum):
             Arch.qwen_e,
             Arch.qwen_e_p,
             Arch.qwen_l,
+            Arch.qwen21,
             Arch.anima,
             Arch.zimage,
             Arch.ernie,
@@ -414,7 +420,7 @@ class ControlMode(Enum):
 
     def can_substitute_instruction(self, arch: Arch):
         """True if this control mode is covered by instruction-following edit models."""
-        if arch.is_flux2:
+        if arch.is_flux2 or arch is Arch.qwen21:
             return self in [
                 ControlMode.style,
                 ControlMode.composition,
@@ -818,6 +824,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3_06b"): ["qwen_3_06b", "qwen3-06b", "qwen3_06b"],
     resource_id(ResourceKind.text_encoder, Arch.all, "ministral"): ["ministral-3-3b", "ministral"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_4b"): ["qwen3vl_4b", "qwen_3vl_4b", "qwen3-vl-4b"],
+    resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_8b"): ["qwen3vl_8b", "qwen_3vl_8b", "qwen3-vl-8b"],
     resource_id(ResourceKind.vae, Arch.sd15, "default"): ["vae-ft-mse-840000-ema"],
     resource_id(ResourceKind.vae, Arch.sdxl, "default"): ["sdxl_vae"],
     resource_id(ResourceKind.vae, Arch.illu, "default"): ["sdxl_vae"],
@@ -832,6 +839,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.vae, Arch.qwen_e, "default"): ["qwen"],
     resource_id(ResourceKind.vae, Arch.qwen_e_p, "default"): ["qwen"],
     resource_id(ResourceKind.vae, Arch.qwen_l, "default"): ["qwen_image_layered_vae"],
+    resource_id(ResourceKind.vae, Arch.qwen21, "default"): ["qwen_image_2.1_vae"],
     resource_id(ResourceKind.vae, Arch.anima, "default"): ["qwen_image"],
     resource_id(ResourceKind.vae, Arch.zimage, "default"): ["z-image", "flux-", "flux_", "flux/", "flux1", "ae.s"],
     resource_id(ResourceKind.vae, Arch.ernie, "default"): ["flux2"],
@@ -845,6 +853,7 @@ required_resource_ids = {
     ResourceId(ResourceKind.text_encoder, Arch.qwen, "qwen"),
     ResourceId(ResourceKind.text_encoder, Arch.qwen_e, "qwen"),
     ResourceId(ResourceKind.text_encoder, Arch.qwen_e_p, "qwen"),
+    ResourceId(ResourceKind.text_encoder, Arch.qwen21, "qwen_3vl_8b"),
     ResourceId(ResourceKind.text_encoder, Arch.anima, "qwen_3_06b"),
     ResourceId(ResourceKind.text_encoder, Arch.zimage, "qwen_3_4b"),
     ResourceId(ResourceKind.text_encoder, Arch.flux2_4b, "qwen_3_4b"),
@@ -865,6 +874,7 @@ required_resource_ids = {
     ResourceId(ResourceKind.vae, Arch.qwen, "default"),
     ResourceId(ResourceKind.vae, Arch.qwen_e, "default"),
     ResourceId(ResourceKind.vae, Arch.qwen_e_p, "default"),
+    ResourceId(ResourceKind.vae, Arch.qwen21, "default"),
     ResourceId(ResourceKind.vae, Arch.anima, "default"),
     ResourceId(ResourceKind.vae, Arch.zimage, "default"),
     ResourceId(ResourceKind.vae, Arch.flux2_4b, "default"),
