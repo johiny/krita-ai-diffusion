@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..backend.resources import ControlMode, UpscalerName
+from ..backend.resources import ControlMode, UpscalerName, rtx_vsr_name, rtx_vsr_node
 from ..localization import translate as _
 from ..model.jobs import JobKind
 from ..model.model import DocumentModel, TileOverlapMode
@@ -131,6 +131,25 @@ class UpscaleWidget(QWidget):
         model_layout.addWidget(self.model_select)
         layout.addLayout(model_layout)
 
+        self.rtx_quality_row = QWidget(self)
+        quality_layout = QHBoxLayout(self.rtx_quality_row)
+        quality_layout.setContentsMargins(0, 0, 0, 0)
+        quality_layout.addWidget(QLabel(_("RTX Quality"), self.rtx_quality_row), 1)
+        self.rtx_quality_select = QComboBox(self.rtx_quality_row)
+        quality_layout.addWidget(self.rtx_quality_select, 3)
+        layout.addWidget(self.rtx_quality_row)
+
+        self.rtx_strength_row = QWidget(self)
+        rtx_strength_layout = QHBoxLayout(self.rtx_strength_row)
+        rtx_strength_layout.setContentsMargins(0, 0, 0, 0)
+        rtx_strength_layout.addWidget(QLabel(_("RTX Strength"), self.rtx_strength_row), 1)
+        self.rtx_strength_slider = StrengthWidget(range=(0.0, 1.0), prefix=False)
+        rtx_strength_layout.addWidget(self.rtx_strength_slider.widget(), 3)
+        layout.addWidget(self.rtx_strength_row)
+
+        self.rtx_quality_row.hide()
+        self.rtx_strength_row.hide()
+
         self.factor_widget = FactorWidget(self)
         self.factor_widget.value_changed.connect(self._update_factor)
         layout.addWidget(self.factor_widget)
@@ -222,6 +241,8 @@ class UpscaleWidget(QWidget):
             self._model_bindings = [
                 bind(model, "workspace", self.workspace_select, "value", Bind.one_way),
                 bind_combo(model.upscale, "upscaler", self.model_select),
+                bind_combo(model.upscale, "rtx_quality", self.rtx_quality_select),
+                bind(model.upscale, "rtx_strength", self.rtx_strength_slider, "value"),
                 bind(model.upscale, "factor", self.factor_widget, "value"),
                 bind_toggle(model.upscale, "use_diffusion", self.refinement_checkbox),
                 bind(model, "style", self.style_select, "value"),
@@ -233,6 +254,7 @@ class UpscaleWidget(QWidget):
                 bind(model.upscale, "can_generate", self.upscale_button, "enabled", Bind.one_way),
                 bind(model, "error", self.error_box, "error", Bind.one_way),
                 model.upscale.tile_overlap_mode_changed.connect(self._update_overlap),
+                model.upscale.upscaler_changed.connect(self._update_rtx_options),
                 model.upscale.use_prompt_changed.connect(self._update_prompt),
                 model.regions.modified.connect(self._update_prompt),
                 model.regions.added.connect(self._update_prompt),
@@ -245,6 +267,7 @@ class UpscaleWidget(QWidget):
             self._update_prompt()
             self._update_style()
             self._update_overlap()
+            self._update_rtx_options()
             self.update_progress()
 
     def update_models(self):
@@ -266,16 +289,36 @@ class UpscaleWidget(QWidget):
                         self.model_select.addItem(name, file)
                     elif file in [UpscalerName.fast_2x.value, UpscalerName.fast_3x.value]:
                         pass
+                    elif file == rtx_vsr_node:
+                        self.model_select.addItem(_(rtx_vsr_name), file)
                     else:
                         self.model_select.addItem(file, file)
                 selected = self.model_select.findData(self.model.upscale.upscaler)
                 self.model_select.setCurrentIndex(max(selected, 0))
+            self._update_rtx_options()
 
     def update_progress(self):
         self.progress_bar.setValue(int(self.model.progress * 100))
 
     def upscale(self):
         self.model.upscale_image()
+
+    def _update_rtx_options(self):
+        models = None
+        if client := root.connection.client_if_connected:
+            models = client.models
+        info = models.rtx_vsr if models is not None else None
+        is_rtx = self.model.upscale.upscaler == rtx_vsr_node
+        self.rtx_quality_row.setVisible(is_rtx and info is not None)
+        self.rtx_strength_row.setVisible(is_rtx and bool(info and info.get("has_strength")))
+        if info is None:
+            return
+        with SignalBlocker(self.rtx_quality_select):
+            self.rtx_quality_select.clear()
+            for quality in info["quality"]:
+                self.rtx_quality_select.addItem(_rtx_quality_label(quality), quality)
+            selected = self.rtx_quality_select.findData(self.model.upscale.rtx_quality)
+            self.rtx_quality_select.setCurrentIndex(max(selected, 0))
 
     def _update_overlap(self):
         self.overlap_input.setEnabled(
@@ -336,4 +379,10 @@ def _upscaler_order(filename: str):
         UpscalerName.fast_4x.value: 1,
         UpscalerName.quality.value: 2,
         UpscalerName.sharp.value: 3,
+        rtx_vsr_node: 4,
     }.get(filename, 99)
+
+
+def _rtx_quality_label(quality: str):
+    words = quality.replace("HIGHBITRATE", "HIGH_BITRATE").split("_")
+    return _(" ".join(words).title())

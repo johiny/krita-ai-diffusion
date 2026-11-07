@@ -164,6 +164,9 @@ class InpaintParams:
 class UpscaleInput:
     model: str = ""  # if empty do tiled refine without upscale model
     tile_overlap: int = -1
+    # Only used when model is the RTX VSR node. Defaults match the node schema.
+    rtx_quality: str = "ULTRA"
+    rtx_strength: float = 1.0
 
 
 @dataclass

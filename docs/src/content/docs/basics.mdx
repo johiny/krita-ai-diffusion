@@ -114,6 +114,14 @@ Choose a model and the desired scaling factor. Clicking Upscale
 will first resize the canvas to the target resolution, then add the generated
 image as a new layer once it is ready.
 
+If the [NVIDIA VFX node pack](https://github.com/Comfy-Org/ComfyUI_Nvidia_VFX_Nodes)
+is installed on the server, "NVIDIA RTX VSR" shows up as an additional option.
+It runs on the GPU through the NVIDIA Video Effects SDK instead of a downloaded
+upscale model, so there is no model file to fetch. Pick an "RTX Quality" preset:
+the DENOISE and DEBLUR variants clean up the input at its original resolution,
+everything else upscales by up to 4x. "RTX Strength" blends the effect with the
+input image.
+
 Checking the "Refine upscaled image" option will additionally run the selected
 diffusion model. Instead of processing the entire image at once, it will be
 split into tiles which are generated one after the other. This can significantly
