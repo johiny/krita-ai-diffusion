@@ -15,6 +15,12 @@ version = "1.54.0"
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
 comfy_version = "e9027f2b30f37bb3052714eb08fcf479542f4fc0"
 
+# Node provided by the official NVIDIA VFX node pack (Comfy-Org/ComfyUI_Nvidia_VFX_Nodes).
+# It is a custom node extension, there is no equivalent node in ComfyUI core.
+# Model selection is handled through this pseudo upscaler name.
+rtx_vsr_node = "RTXVideoSuperResolution"
+rtx_vsr_name = "NVIDIA RTX VSR"
+
 
 class CustomNode(NamedTuple):
     name: str

@@ -221,6 +221,11 @@ class ComfyClient(Client):
         models.upscalers = nodes.options("UpscaleModelLoader", "model_name")
         available_resources.update(_find_upscalers(models.upscalers))
 
+        # Optional: NVIDIA RTX Video Super Resolution (official VFX node pack)
+        models.rtx_vsr = _find_rtx_vsr(nodes)
+        if models.rtx_vsr is not None:
+            models.upscalers.append(resources.rtx_vsr_node)
+
         inpaint_models = nodes.options("INPAINT_LoadInpaintModel", "model_name")
         available_resources.update(_find_inpaint_models(inpaint_models))
 
@@ -805,6 +810,46 @@ def _find_model_patches(model_list: Sequence[str]):
 def _find_style_models(model_list: Sequence[str]):
     redux_flux = ResourceId(ResourceKind.ip_adapter, Arch.flux, ControlMode.reference)
     return {redux_flux.string: find_model(model_list, redux_flux)}
+
+
+def _combo_options(input_def: list | None) -> list[str]:
+    """Read the allowed values of a COMBO input from object_info.
+
+    ComfyUI exposes two shapes: the legacy ``[[...], {...}]`` and the v3
+    ``["COMBO", {"options": [...]}]``. Both are supported here.
+    """
+    if not input_def:
+        return []
+    meta = input_def[1] if len(input_def) > 1 and isinstance(input_def[1], dict) else {}
+    options = meta.get("options")
+    if isinstance(options, list):
+        return [str(o) for o in options]
+    if isinstance(input_def[0], list):
+        return [str(o) for o in input_def[0]]
+    return []
+
+
+def _find_rtx_vsr(nodes: ComfyObjectInfo) -> dict[str, Any] | None:
+    """Collect what the installed RTX VSR node actually supports.
+
+    The node schema changed between pack versions (quality modes expanded, strength and
+    image_encoding were added), so nothing is assumed here.
+    """
+    inputs = nodes.inputs(resources.rtx_vsr_node)
+    if inputs is None:
+        return None
+    quality_def = inputs.get("quality")
+    quality = _combo_options(quality_def)
+    if not quality:
+        return None
+    default = None
+    if isinstance(quality_def, list) and len(quality_def) > 1 and isinstance(quality_def[1], dict):
+        default = quality_def[1].get("default")
+    return {
+        "quality": quality,
+        "default_quality": default if default in quality else quality[0],
+        "has_strength": "strength" in inputs,
+    }
 
 
 def _find_upscalers(model_list: Sequence[str]):
