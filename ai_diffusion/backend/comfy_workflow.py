@@ -455,6 +455,37 @@ class ComfyWorkflow:
     def basic_guider(self, model: Output, positive: Output):
         return self.add("BasicGuider", 1, model=model, conditioning=positive)
 
+    def h3_sigma_shift(self, model: Output, shift_video=1.0, shift_audio=1.0):
+        return self.add(
+            "MiniMaxH3SigmaShift", 1, model=model, shift_video=shift_video, shift_audio=shift_audio
+        )
+
+    def manual_sigmas(self, sigmas: str):
+        return self.add("ManualSigmas", 1, sigmas=sigmas)
+
+    def p_h3_conditioning(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        extent: Extent,
+        image: Output | None = None,
+    ):
+        """P-H3 Image conditioning. Returns (conditioning, latent) - the node builds its own latent.
+
+        Reference images are flattened as ``images.image_N`` keys (autogrow inputs).
+        """
+        args: dict[str, Any] = {
+            "clip": clip,
+            "vae": vae,
+            "prompt": prompt,
+            "width": extent.width,
+            "height": extent.height,
+        }
+        if image is not None:
+            args["images.image_1"] = image
+        return self.add("PH3ImageConditioning", 2, **args)
+
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
             "CFGGuider",

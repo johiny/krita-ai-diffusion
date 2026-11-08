@@ -136,7 +136,7 @@ class ScaledExtent(NamedTuple):
 # Image resolution for diffusion should be divisible by this factor, either because it is the
 # required latent compression factor, or to avoid border artifacts with UNET models.
 def diffusion_multiple(arch: Arch):
-    return 32 if arch is Arch.qwen2 else 16
+    return 32 if arch in (Arch.qwen2, Arch.p_h3) else 16
 
 
 class CheckpointResolution(NamedTuple):

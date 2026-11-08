@@ -93,6 +93,7 @@ class Arch(Enum):
     zimage = "Z-Image"
     ernie = "ERNIE Image"
     krea2 = "Krea 2"
+    p_h3 = "P-H3 Image"
 
     auto = "Automatic"
     all = "All"
@@ -100,6 +101,10 @@ class Arch(Enum):
     @staticmethod
     def from_string(string: str, model_type: str = "eps", filename: str | None = None):
         filename = filename.lower() if filename else ""
+        # ComfyUI reports base_model "unknown" for P-H3 Image (and for other MiniMax H3 files),
+        # so the filename is the discriminator.
+        if "p-h3" in filename or "p_h3" in filename:
+            return Arch.p_h3
         if string == "sd15":
             return Arch.sd15
         if string == "sdxl" and model_type == "v-prediction":
@@ -196,7 +201,7 @@ class Arch(Enum):
 
     @property
     def supports_cfg(self):
-        return self not in [Arch.flux, Arch.flux_k]
+        return self not in [Arch.flux, Arch.flux_k, Arch.p_h3]
 
     @property
     def supports_alpha(self):
@@ -208,7 +213,7 @@ class Arch(Enum):
 
     @property
     def supports_edit(self):  # includes text-to-image models that can also edit
-        return self.is_edit or self.is_flux2 or self is Arch.qwen2
+        return self.is_edit or self.is_flux2 or self in (Arch.qwen2, Arch.p_h3)
 
     @property
     def is_sdxl_like(self):
@@ -256,6 +261,8 @@ class Arch(Enum):
                 return ["ministral"]
             case Arch.krea2:
                 return ["qwen_3vl_4b"]
+            case Arch.p_h3:
+                return ["minimax"]
             case _:
                 raise ValueError(f"Unsupported architecture: {self}")
 
@@ -281,6 +288,7 @@ class Arch(Enum):
             Arch.zimage,
             Arch.ernie,
             Arch.krea2,
+            Arch.p_h3,
         ]
 
 
@@ -829,6 +837,10 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.text_encoder, Arch.all, "ministral"): ["ministral-3-3b", "ministral"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_4b"): ["qwen3vl_4b", "qwen_3vl_4b", "qwen3-vl-4b"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_8b"): ["qwen3vl_8b", "qwen_3vl_8b", "qwen3-vl-8b"],
+    resource_id(ResourceKind.text_encoder, Arch.all, "minimax"): [
+        "p-h3-image_text_encoder",
+        "p_h3_image_text_encoder",
+    ],
     resource_id(ResourceKind.vae, Arch.sd15, "default"): ["vae-ft-mse-840000-ema"],
     resource_id(ResourceKind.vae, Arch.sdxl, "default"): ["sdxl_vae"],
     resource_id(ResourceKind.vae, Arch.illu, "default"): ["sdxl_vae"],
@@ -848,6 +860,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.vae, Arch.zimage, "default"): ["z-image", "flux-", "flux_", "flux/", "flux1", "ae.s"],
     resource_id(ResourceKind.vae, Arch.ernie, "default"): ["flux2"],
     resource_id(ResourceKind.vae, Arch.krea2, "default"): ["qwen_image"],
+    resource_id(ResourceKind.vae, Arch.p_h3, "default"): ["p-h3-image_vae", "p_h3_image_vae"],
 }
 # fmt: on
 
