@@ -383,6 +383,10 @@ class ComfyWorkflow:
         arch=Arch.sdxl,
         extent: Extent | None = None,
     ):
+        if scheduler == "manual":
+            # Sentinel used by the MiniMax H3 preset; other architectures need a real scheduler.
+            log.warning("Scheduler 'manual' is only supported by MiniMax H3, using 'normal'")
+            scheduler = "normal"
         if scheduler in ("align_your_steps", "ays"):
             assert arch is Arch.sd15 or arch.is_sdxl_like
 

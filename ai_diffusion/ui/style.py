@@ -30,7 +30,7 @@ from ..files import File, FileFilter, FileFormat, FileSource
 from ..localization import translate as _
 from ..model.root import root
 from ..settings import ServerMode, Setting, settings
-from ..style import SamplerPresets, Style, Styles, StyleSettings
+from ..style import SamplerPresets, Style, Styles, StyleSettings, h3_sampler_preset
 from . import theme
 from .settings_widgets import (
     ComboBoxSetting,
@@ -493,6 +493,7 @@ class SamplerWidget(QWidget):
 
         expander = ExpanderButton(title, self)
 
+        self._h3_mode = False
         self._preset = QComboBox(self)
         self._preset.addItems(SamplerPresets.instance().names())
         self._preset.setMinimumWidth(230)
@@ -551,11 +552,18 @@ class SamplerWidget(QWidget):
         self._update_info()
         self.notify_changed()
 
+    def set_h3_mode(self, enabled: bool):
+        """MiniMax H3: every knob stays free; the info line shows the recommended values."""
+        self._h3_mode = enabled
+        self._update_info()
+
     def _update_info(self):
         preset = self.preset
         text = "<b>" + _("Sampler") + f":</b> {preset.sampler} / {preset.scheduler}"
         if preset.lora:
             text += f" +LoRA '{preset.lora}'"
+        if self._h3_mode:
+            text += " · " + _("recommended: 8 steps, er_sde, manual schedule, CFG 1.0")
         self._sampler_info.setText(text)
 
     def _open_user_presets(self):
@@ -566,6 +574,12 @@ class SamplerWidget(QWidget):
 
     def notify_changed(self):
         self.value_changed.emit()
+
+    def apply_preset(self, name: str):
+        """Switch to a preset without emitting changes (callers write the style themselves)."""
+        with SignalBlocker(self):
+            self._preset.setCurrentText(name)
+            self._select_preset(self._preset.currentIndex())
 
     def read(self, style: Style):
         self._preset.setCurrentText(getattr(style, f"{self.prefix}sampler"))
@@ -945,6 +959,9 @@ class StylePresets(SettingsTab):
             self._arch_select.set_items([(e.value, e.name) for e in valid_archs])
             if self.current_style.architecture in valid_archs:
                 self._arch_select.value = self.current_style.architecture
+        is_h3 = arch is Arch.h3
+        self._default_sampler.set_h3_mode(is_h3)
+        self._live_sampler.set_h3_mode(is_h3)
         self._clip_skip_check.setEnabled(arch.supports_clip_skip)
         self._clip_skip.enabled = arch.supports_clip_skip and self.current_style.clip_skip > 0
         self._zsnr.enabled = arch.supports_attention_guidance
@@ -979,6 +996,13 @@ class StylePresets(SettingsTab):
                 setattr(style, name, widget.value)
         style.loras = self._loras.value
         self._write_checkpoint(style)
+        # MiniMax H3 defaults to its distilled schedule; any other preset is respected as-is.
+        arch = resolve_arch(style, root.connection.client_if_connected)
+        if arch is Arch.h3:
+            if style.sampler == StyleSettings.sampler.default:
+                self._default_sampler.apply_preset(h3_sampler_preset)
+            if style.live_sampler == StyleSettings.live_sampler.default:
+                self._live_sampler.apply_preset(h3_sampler_preset)
         self._default_sampler.write(style)
         self._live_sampler.write(style)
         self._enable_checkpoint_advanced()

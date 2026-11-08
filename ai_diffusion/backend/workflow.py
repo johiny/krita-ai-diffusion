@@ -1189,15 +1189,57 @@ def refine(
     return w
 
 
-def _h3_sample(w: ComfyWorkflow, model: Output, prompt: Output, latent: Output, seed: int):
-    guider = w.basic_guider(model, prompt)
+h3_manual_schedulers = ("manual", "p-h3", "distilled")
+
+
+def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent, sampling):
+    """Second conditioning for CFG. The node has no negative input, so it gets an empty prompt."""
+    if sampling.cfg_scale <= 1.0:
+        return None
+    text = cond.negative.prepare(w) if cond.negative is not None else ""
+    negative, _ = w.h3_conditioning(clip.model, vae, text, extent)
+    return negative
+
+
+def _h3_sampler(sampling: SamplingInput, models: ModelDict):
+    """Use the requested sampler when ComfyUI has it, otherwise the distilled default."""
+    available = models.all.node_inputs.options("KSamplerSelect", "sampler_name")
+    return sampling.sampler if sampling.sampler in available else "er_sde"
+
+
+def _h3_sample(
+    w: ComfyWorkflow,
+    model: Output,
+    prompt: Output,
+    negative: Output | None,
+    latent: Output,
+    sampling: SamplingInput,
+    extent: Extent,
+    models: ModelDict,
+):
+    """Everything here is the user's choice; recommended values are documented in MINIMAX_H3.md.
+
+    Scheduler "manual" is the distilled 8-step schedule the model ships with. Any other scheduler
+    is passed through to ComfyUI, as are the sampler and the step count. CFG > 1 adds a second
+    conditioning node and a CFGGuider.
+    """
+    if negative is not None:
+        guider = w.cfg_guider(model, ConditioningOutput(prompt, negative), sampling.cfg_scale)
+    else:
+        guider = w.basic_guider(model, prompt)
+    if sampling.scheduler.lower() in h3_manual_schedulers:
+        sigmas = w.manual_sigmas(h3_sigmas)
+    else:
+        sigmas = w.scheduler_sigmas(
+            model, sampling.scheduler, sampling.total_steps, models.arch, extent
+        )
     return w.add(
         "SamplerCustomAdvanced",
         output_count=2,
-        noise=w.random_noise(seed),
+        noise=w.random_noise(sampling.seed),
         guider=guider,
-        sampler=w.sampler_select("er_sde"),
-        sigmas=w.manual_sigmas(h3_sigmas),
+        sampler=w.sampler_select(_h3_sampler(sampling, models)),
+        sigmas=sigmas,
         latent_image=latent,
     )[1]
 
@@ -1211,13 +1253,14 @@ def generate_h3(
     misc: MiscParams,
     models: ModelDict,
 ):
-    """P-H3 Image text-to-image. Distilled model: no CFG, no negative prompt, fixed 8 steps."""
+    """MiniMax H3 text-to-image. Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md."""
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
     prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
-    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     out_image = scale_to_target(extent, w, out_image, models)
@@ -1242,8 +1285,9 @@ def refine_h3(
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
     prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial, image=in_image)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
-    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     out_image = scale_to_target(extent, w, out_image, models)
@@ -1289,7 +1333,10 @@ def inpaint_h3(
     prompt, latent = w.h3_conditioning(
         clip.model, vae, positive, initial_bounds.extent, image=region
     )
-    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
+    negative = _h3_negative(w, cond, clip, vae, initial_bounds.extent, sampling)
+    out_latent = _h3_sample(
+        w, model, prompt, negative, latent, sampling, initial_bounds.extent, models
+    )
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.color_match(out_image, region, region_mask, misc.color_match)
     if initial_bounds.extent != target_bounds.extent:

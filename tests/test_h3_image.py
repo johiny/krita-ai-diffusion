@@ -64,7 +64,23 @@ def node_defs() -> ComfyObjectInfo:
             }
         },
         "BasicGuider": {"input": {"required": {}}},
-        "KSamplerSelect": {"input": {"required": {"sampler_name": ["COMBO", {}]}}},
+        "KSamplerSelect": {
+            "input": {
+                "required": {
+                    "sampler_name": ["COMBO", {"options": ["er_sde", "euler", "dpmpp_2m"]}]
+                }
+            }
+        },
+        "BasicScheduler": {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "scheduler": ["COMBO", {"options": ["normal", "karras", "beta"]}],
+                    "steps": ["INT", {"default": 20}],
+                    "denoise": ["FLOAT", {"default": 1.0}],
+                }
+            }
+        },
         "ManualSigmas": {"input": {"required": {"sigmas": ["STRING", {}]}}},
         "RandomNoise": {"input": {"required": {"noise_seed": ["INT", {"default": 0}]}}},
         "SamplerCustomAdvanced": {"input": {"required": {}}},
@@ -102,8 +118,8 @@ def client_models() -> ClientModels:
     return models
 
 
-def sampling() -> SamplingInput:
-    return SamplingInput("euler", "normal", 7.0, 20, 0, 1234)
+def sampling(sampler="er_sde", scheduler="manual", steps=8, cfg=1.0) -> SamplingInput:
+    return SamplingInput(sampler, scheduler, cfg, steps, 0, 1234)
 
 
 def misc(batch=1):
@@ -220,6 +236,96 @@ def test_text_to_image_graph():
 
     (sampler,) = nodes_of(w, "KSamplerSelect")
     assert sampler["inputs"]["sampler_name"] == "er_sde"
+    assert "BasicScheduler" not in types  # agenda destilada, no scheduler de ComfyUI
+
+
+def test_sampler_is_configurable():
+    models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    workflow.generate_h3(
+        w,
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        prompt(),
+        sampling(sampler="dpmpp_2m"),
+        misc(),
+        models.for_arch(resources.Arch.h3),
+    )
+    (sampler,) = nodes_of(w, "KSamplerSelect")
+    assert sampler["inputs"]["sampler_name"] == "dpmpp_2m"
+    assert "ManualSigmas" in class_types(w)  # la agenda sigue siendo la destilada
+
+
+def test_unknown_sampler_falls_back_to_distilled_default():
+    models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    workflow.generate_h3(
+        w,
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        prompt(),
+        sampling(sampler="not_a_real_sampler"),
+        misc(),
+        models.for_arch(resources.Arch.h3),
+    )
+    (sampler,) = nodes_of(w, "KSamplerSelect")
+    assert sampler["inputs"]["sampler_name"] == "er_sde"
+
+
+def test_scheduler_and_steps_are_configurable():
+    models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    workflow.generate_h3(
+        w,
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        prompt(),
+        sampling(sampler="dpmpp_2m", scheduler="karras", steps=12),
+        misc(),
+        models.for_arch(resources.Arch.h3),
+    )
+    types = class_types(w)
+    assert "ManualSigmas" not in types
+    (sched,) = nodes_of(w, "BasicScheduler")
+    assert sched["inputs"]["scheduler"] == "karras"
+    assert sched["inputs"]["steps"] == 12
+
+
+def test_cfg_adds_a_second_conditioning_and_cfg_guider():
+    models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    workflow.generate_h3(
+        w,
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        prompt(),
+        sampling(cfg=4.0),
+        misc(),
+        models.for_arch(resources.Arch.h3),
+    )
+    types = class_types(w)
+    assert types.count("PH3ImageConditioning") == 2
+    (guider,) = nodes_of(w, "CFGGuider")
+    assert math.isclose(guider["inputs"]["cfg"], 4.0)
+    assert "BasicGuider" not in types
+
+
+def test_default_cfg_uses_basic_guider():
+    models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    workflow.generate_h3(
+        w,
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        prompt(),
+        sampling(),
+        misc(),
+        models.for_arch(resources.Arch.h3),
+    )
+    types = class_types(w)
+    assert types.count("PH3ImageConditioning") == 1
+    assert "BasicGuider" in types
+    assert "CFGGuider" not in types
 
 
 def test_clip_loader_uses_minimax_type():
