@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import struct
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from itertools import product
 from time import time
@@ -13,7 +14,7 @@ from typing import Any
 
 from .. import platform_tools, util
 from ..files import FileFormat
-from ..image import Image, ImageCollection, Point
+from ..image import Extent, Image, ImageCollection, Point
 from ..localization import translate as _
 from ..settings import PerformanceSettings, settings
 from ..style import Styles
@@ -21,7 +22,7 @@ from ..util import client_logger as log
 from ..util import parse_enum
 from ..websockets.src import websockets
 from . import resources
-from .api import WorkflowInput
+from .api import ExtentInput, WorkflowInput
 from .client import (
     CheckpointInfo,
     Client,
@@ -41,7 +42,7 @@ from .client import (
     filter_supported_styles,
     loras_to_upload,
 )
-from .comfy_workflow import ComfyObjectInfo
+from .comfy_workflow import ComfyObjectInfo, ComfyWorkflow
 from .network import NetworkError, RequestManager
 from .resources import (
     Arch,
@@ -134,6 +135,27 @@ class Progress:
         node_part = self._nodes / (self._info.node_count + 1)
         sample_part = self._samples / max(self._info.sample_count, 1)
         return 0.2 * node_part + 0.8 * sample_part
+
+
+def _h3_upsampler_model(models: ClientModels) -> str | None:
+    if "TextGenerate" not in models.node_inputs:
+        return None
+    names: list[str] = []
+    try:
+        names += models.node_inputs.options("CLIPLoader", "clip_name")
+    except (KeyError, TypeError):
+        pass
+    names += [f for f in models.resources.values() if f]
+    for filename in names:
+        if "prompt_upsampler" in filename.lower():
+            return filename
+    return None
+
+
+def _aspect_ratio(extent: ExtentInput | Extent) -> str:
+    size = extent.desired if isinstance(extent, ExtentInput) else extent
+    divisor = math.gcd(size.width, size.height) or 1
+    return f"{size.width // divisor}:{size.height // divisor}"
 
 
 class ComfyClient(Client):
@@ -299,7 +321,57 @@ class ComfyClient(Client):
         except asyncio.CancelledError:
             pass
 
+    async def expand_h3_prompt(self, work: WorkflowInput) -> WorkflowInput:
+        """Rewrite the request with the P-H3 prompt upsampler before the main job.
+
+        The upsampler runs as its own prompt: its 9 GB and the diffusion model do not fit in 24 GB
+        together, so sharing one graph makes ComfyUI stream both sets of weights from disk (an edit
+        goes from under a minute to over 20). Chained like this it costs ~15 s warm.
+        """
+        cond = work.conditioning
+        if not work.expand_prompt or cond is None or not cond.positive.strip():
+            return work
+        if work.models is None or work.models.version is not Arch.h3:
+            return work
+        upsampler = _h3_upsampler_model(self.models)
+        if upsampler is None:
+            return work
+        try:
+            text = await self._run_h3_upsampler(upsampler, cond.positive, work)
+        except Exception as e:
+            log.warning(f"MiniMax H3 prompt upsampler failed, keeping the request as typed: {e}")
+            return work
+        if not text.strip():
+            return work
+        log.info(f"MiniMax H3 prompt upsampler expanded the request ({len(text)} chars)")
+        return replace(work, conditioning=replace(cond, positive=text))
+
+    async def _run_h3_upsampler(self, upsampler: str, prompt: str, work: WorkflowInput) -> str:
+        wf = ComfyWorkflow(self.models.node_inputs)
+        clip = wf.load_clip(upsampler, type="minimax")
+        image = work.image if work.images is not None else None
+        image_out = wf.add("ETN_LoadImageBase64", 1, image=image.to_base64()) if image else None
+        text = wf.h3_prompt_upsample(clip, prompt, image_out, _aspect_ratio(work.extent))
+        preview = wf.add("PreviewAny", 1, source=text)
+
+        job_id = str(uuid.uuid4())
+        data = {"prompt": wf.root, "client_id": self._id, "prompt_id": job_id}
+        await self._post("prompt", data)
+        deadline = time() + 600
+        while time() < deadline:
+            await asyncio.sleep(1.5)
+            history = await self._get(f"history/{job_id}")
+            if job_id not in history:
+                continue
+            entry = history[job_id]
+            if entry.get("status", {}).get("status_str") == "error":
+                raise RuntimeError("the upsampler job failed")
+            texts = entry.get("outputs", {}).get(str(preview.node), {}).get("text") or []
+            return str(texts[0]) if texts else ""
+        raise TimeoutError("the upsampler job timed out")
+
     async def _run_job(self, job: JobInfo):
+        job.work = await self.expand_h3_prompt(job.work)
         workflow = create_workflow(job.work, self.models)
         if settings.debug_dump_workflow:
             workflow.embed_images().dump(util.log_dir)

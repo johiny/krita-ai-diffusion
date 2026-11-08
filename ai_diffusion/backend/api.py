@@ -199,6 +199,8 @@ class WorkflowInput:
     color_match: float = 0.0
     nsfw_filter: float = 0.0
     custom_workflow: CustomWorkflowInput | None = None
+    # Rewrite the request with the P-H3 prompt upsampler before running (never for live preview).
+    expand_prompt: bool = False
 
     @property
     def extent(self):

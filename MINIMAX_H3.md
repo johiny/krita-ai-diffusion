@@ -46,12 +46,15 @@ scratch. Measured on a 640x544 canvas with a 400x360 selection: no global shift 
 
 The model card is explicit about what P-H3-Image needs, and the workflow follows it:
 
-- **Prompt upsampler (off by default).** Short requests give weak results, so the model card runs
-  them through the Qwen3.5-9B upsampler first (`TextGenerate`, greedy, the `<Picture 1>` chat
-  template from the official edit workflow). The plumbing is in place
-  (`h3_prompt_upsampler_enabled`), but on 24 GB the 9 GB upsampler and the model do not fit
-  together: with ComfyUI's `--fast` dynamic loading both stage weights on disk and an edit goes
-  from ~3 minutes to over 20. Enable it only where both models fit, or run it as a separate pass.
+- **Prompt upsampler, as a separate job.** Short requests give weak results, so the request goes
+  through the Qwen3.5-9B upsampler before sampling (`TextGenerate`, greedy, the `<Picture 1>` chat
+  template from the official edit workflow), and the expanded brief becomes the prompt.
+
+  It runs as its own prompt, chained by the client (`expand_h3_prompt`), because the 9 GB
+  upsampler and the model do not fit in 24 GB together: in one graph ComfyUI stages both sets of
+  weights on disk and an edit goes from ~1 minute to over 20. Measured chained on a 3090: 14 s
+  for the upsampler and 37 s for the edit at 1568x1312, versus 3 minutes for a 4 MP edit without
+  it. Live previews skip it (`WorkflowInput.expand_prompt` is only set for full jobs).
 - **4 MP edits.** Crops are upscaled to 4 MP (capped at 4x linear) before sampling and scaled back
   after, per *"edits work best at 4 or 8 MP"*. Expect edits to take a minute rather than seconds.
 - **`euler`** with the 8-step schedule, as in the official workflows.

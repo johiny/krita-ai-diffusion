@@ -4,6 +4,8 @@ The family (P-H3 Image distillation and its finetunes) uses one conditioning nod
 both the conditioning and the latent, a fixed 8-step schedule and no CFG.
 """
 
+import asyncio
+import dataclasses
 import json
 import math
 
@@ -595,3 +597,79 @@ def test_edit_seeds_the_latent_from_the_image_when_available():
     assert "PH3ImageConditioning" not in class_types(w)
     # El latent viene del nodo, no de un VAEEncode: no se puede codificar aparte.
     assert "VAEEncode" not in class_types(w)
+
+
+def test_prompt_upsampler_runs_as_its_own_job(monkeypatch):
+    """The upsampler and the model cannot share VRAM, so it is chained as a separate prompt."""
+    from ai_diffusion.backend import comfy_client
+
+    client = comfy_client.ComfyClient("http://127.0.0.1:8188")
+    models = client_models()
+    defs = node_defs()
+    defs.nodes["TextGenerate"] = {
+        "input": {
+            "required": {
+                "clip": ["CLIP", {}],
+                "prompt": ["STRING", {"default": ""}],
+                "max_length": ["INT", {"default": 512}],
+                "sampling_mode": ["COMBO", {"options": ["off"]}],
+            }
+        },
+        "output": ["STRING", "STRING"],
+    }
+    models.node_inputs = defs
+    models.resources = {
+        **models.resources,
+        "upsampler": "p-h3-image_prompt_upsampler_int8_convrot.safetensors",
+    }
+    client.models = models
+
+    sent = {}
+
+    async def fake_post(op, data):
+        sent[op] = data
+        return {"prompt_id": data["prompt_id"]}
+
+    async def fake_get(op, timeout=60):
+        if op.startswith("history/"):
+            prompt_id = op.split("/", 1)[1]
+            node_ids = [
+                k for k, v in sent["prompt"]["prompt"].items() if v["class_type"] == "PreviewAny"
+            ]
+            return {
+                prompt_id: {
+                    "status": {"status_str": "success"},
+                    "outputs": {node_ids[0]: {"text": ["EXPANDED BRIEF"]}},
+                }
+            }
+        return {}
+
+    monkeypatch.setattr(client, "_post", fake_post)
+    monkeypatch.setattr(client, "_get", fake_get)
+
+    e = Extent(512, 512)
+    work = workflow.WorkflowInput(
+        workflow.WorkflowKind.refine,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("make her smile", ""),
+        sampling=sampling(),
+        batch_count=1,
+    )
+    work.expand_prompt = True
+    result = asyncio.run(client.expand_h3_prompt(work))
+
+    assert result.conditioning is not None
+    assert result.conditioning.positive == "EXPANDED BRIEF"
+    graph = sent["prompt"]["prompt"]
+    (generate,) = [n for n in graph.values() if n["class_type"] == "TextGenerate"]
+    assert "<Picture 1>" in generate["inputs"]["prompt"]
+    assert "make her smile" in generate["inputs"]["prompt"]
+    assert generate["inputs"]["sampling_mode"] == "off"
+    # El job principal sigue recibiendo el texto ya expandido, sin el nodo de texto.
+    assert all(
+        n["class_type"] != "TextGenerate"
+        for n in workflow.create(
+            dataclasses.replace(result, expand_prompt=False), models
+        ).root.values()
+    )
