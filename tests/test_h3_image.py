@@ -114,6 +114,14 @@ def node_defs() -> ComfyObjectInfo:
         "VAEDecode": {"input": {"required": {}}},
         "RepeatLatentBatch": {"input": {"required": {}}},
         "ETN_LoadImageCache": {"input": {"required": {}}},
+        "UpscaleModelLoader": {
+            "input": {"required": {"model_name": ["COMBO", {"options": ["4x-AnimeSharp.pth"]}]}}
+        },
+        "ImageUpscaleWithModel": {
+            "input": {
+                "required": {"upscale_model": ["UPSCALE_MODEL", {}], "image": ["IMAGE", {}]}
+            }
+        },
         "ETN_SaveImageCache": {"input": {"required": {"format": ["COMBO", {"options": ["PNG"]}]}}},
         "ImageScale": {
             "input": {
@@ -673,3 +681,20 @@ def test_prompt_upsampler_runs_as_its_own_job(monkeypatch):
             dataclasses.replace(result, expand_prompt=False), models
         ).root.values()
     )
+
+
+def test_upscale_without_refine_needs_no_checkpoint():
+    """Unchecking "Refine upscaled image" builds a graph with no checkpoint at all.
+
+    The H3 branch reads the architecture from the checkpoint, which an upscale job does not carry,
+    so it used to fail with the useless message "a value is required".
+    """
+    models = client_models()
+    e = Extent(256, 256)
+    wf_input = workflow.prepare_upscale_simple(Image.create(e), "4x-AnimeSharp.pth", 2.0)
+    w = workflow.create(wf_input, models)
+
+    (loader,) = nodes_of(w, "UpscaleModelLoader")
+    assert loader["inputs"]["model_name"] == "4x-AnimeSharp.pth"
+    assert "ImageUpscaleWithModel" in class_types(w)
+    assert "KSampler" not in class_types(w)

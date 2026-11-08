@@ -2054,8 +2054,8 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     workflow = ComfyWorkflow(models.node_inputs, comfy_mode)
     layer_count = i.images.layer_count if i.images else 1
     misc = MiscParams(i.batch_count, layer_count, i.color_match, i.nsfw_filter)
-    arch = ensure(i.models).version
-    is_h3 = arch is Arch.h3
+    # Plain upscaling and control maps carry no checkpoint, so only sampling jobs know the arch.
+    is_h3 = i.models is not None and i.models.version is Arch.h3
 
     if i.kind is WorkflowKind.generate:
         if is_h3:
@@ -2066,7 +2066,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
                 Conditioning.from_input(ensure(i.conditioning), i.sampling),
                 ensure(i.sampling),
                 misc,
-                models.for_arch(arch),
+                models.for_arch(ensure(i.models).version),
             )
         return generate(
             workflow,
@@ -2087,7 +2087,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
                 ensure(i.sampling),
                 ensure(i.inpaint),
                 misc,
-                models.for_arch(arch),
+                models.for_arch(ensure(i.models).version),
             )
         return inpaint(
             workflow,
@@ -2110,7 +2110,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
                 Conditioning.from_input(ensure(i.conditioning), i.sampling),
                 ensure(i.sampling),
                 misc,
-                models.for_arch(arch),
+                models.for_arch(ensure(i.models).version),
             )
         return refine(
             workflow,
@@ -2133,7 +2133,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
                 ensure(i.sampling),
                 ensure(i.inpaint),
                 misc,
-                models.for_arch(arch),
+                models.for_arch(ensure(i.models).version),
             )
         return refine_region(
             workflow,
