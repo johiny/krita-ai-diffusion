@@ -98,13 +98,16 @@ free knobs to explore, not as a quality guarantee.
 ## Performance (RTX 3090, `--fast` dynamic VRAM loading)
 
 Measured with `h3ErosMax` (20 GB int8), `preserve_strength` 0.6, one edited image, seed fixed.
-Generation time is dominated by streaming the 20 GB transformer from disk, not by pixels:
+Without a LoRA, generation time is dominated by streaming the 20 GB transformer from disk, not by
+pixels. With the P-H3 LoRA at 4 MP the weights no longer fit alongside the activations and time
+scales with area:
 
 | Config | 1088x1088 | 1440x1440 | 2048x2048 |
 |---|---|---|---|
 | without the upsampler | 41 s | 47 s | 45 s |
 | with the upsampler | 31 s | 36 s | 50 s |
 | control, fresh seed | 60 s | 55 s | 64 s |
+| LoRA 1.0 + euler | 47 s | 57 s | 135 s |
 
 - The upsampler costs 13-17 s warm, 28 s cold, and ~2 s when ComfyUI caches the same prompt and
   image. It never runs concurrently with the model, so it does not slow sampling down.
