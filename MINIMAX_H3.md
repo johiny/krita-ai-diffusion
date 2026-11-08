@@ -46,15 +46,11 @@ scratch. Measured on a 640x544 canvas with a 400x360 selection: no global shift 
 
 The model card is explicit about what P-H3-Image needs, and the workflow follows it:
 
-- **Prompt upsampler, as a separate job.** Short requests give weak results, so the request goes
-  through the Qwen3.5-9B upsampler before sampling (`TextGenerate`, greedy, the `<Picture 1>` chat
-  template from the official edit workflow), and the expanded brief becomes the prompt.
-
-  It runs as its own prompt, chained by the client (`expand_h3_prompt`), because the 9 GB
-  upsampler and the model do not fit in 24 GB together: in one graph ComfyUI stages both sets of
-  weights on disk and an edit goes from ~1 minute to over 20. Measured chained on a 3090: 14 s
-  for the upsampler and 37 s for the edit at 1568x1312, versus 3 minutes for a 4 MP edit without
-  it. Live previews skip it (`WorkflowInput.expand_prompt` is only set for full jobs).
+- **No prompt upsampler.** The request is sent exactly as typed. The Qwen3.5-9B upsampler from the
+  model card was wired as a chained job (`expand_h3_prompt`) and then removed: it cost ~11 s per
+  edit, it never ran for `generate` jobs (there is no canvas image to condition it, so it failed
+  silently and the client kept the typed prompt), and on text-only requests it rewrote the medium
+  into a photograph. Prompts here are written by hand and work at 100-300 characters.
 - **4 MP edits.** Crops are upscaled to 4 MP (capped at 4x linear) before sampling and scaled back
   after, per *"edits work best at 4 or 8 MP"*. Expect edits to take a minute rather than seconds.
 - **`euler`** with the 8-step schedule, as in the official workflows.
@@ -155,16 +151,12 @@ scales with area:
 
 | Config | 1088x1088 | 1440x1440 | 2048x2048 |
 |---|---|---|---|
-| without the upsampler | 41 s | 47 s | 45 s |
-| with the upsampler | 31 s | 36 s | 50 s |
+| plain generation | 41 s | 47 s | 45 s |
 | control, fresh seed | 60 s | 55 s | 64 s |
 | LoRA 1.0 + euler | 47 s | 57 s | 135 s |
 
-- The upsampler costs 13-17 s warm, 28 s cold, and ~2 s when ComfyUI caches the same prompt and
-  image. It never runs concurrently with the model, so it does not slow sampling down.
-- Every generation re-stages the model after the upsampler job, but only the first job after a
-  cold disk read pays for it: 128 s once, then 45-60 s for identical work.
-- Real Krita jobs at 1312x1312 with the LoRA loaded: 59.8 s and 58.2 s, plus 12.7 s and 13.6 s of
-  upsampler - about 72 s per edit.
-- Peak VRAM: 21-23 GB. 4 MP + the upsampler in one graph does not fit: both sets of weights end up
-  streaming and an edit takes over 20 minutes, which is why the upsampler is a separate job.
+- These numbers are without a prompt upsampler. The chained upsampler job added 11-17 s warm and
+  28 s cold per job (it re-staged weights after it ran) and was removed; an edit is now the
+  sampling time plus the reference encode, nothing else.
+- Peak VRAM: 21-23 GB at 1024x1024 with one reference. 4 MP with references does not fit: 23.8 GB
+  measured, so keep reference edits at 1-2 MP.

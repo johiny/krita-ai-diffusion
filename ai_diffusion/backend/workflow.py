@@ -2039,11 +2039,6 @@ def prepare(
     which can be compared and serialized.
     """
     i = WorkflowInput(kind)
-    i.expand_prompt = not is_live and kind in (
-        WorkflowKind.generate,
-        WorkflowKind.refine,
-        WorkflowKind.refine_region,
-    )
     i.conditioning = cond
     i.sampling = sampling_from_style(style, strength, is_live)
     i.sampling.seed = seed
