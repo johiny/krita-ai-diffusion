@@ -108,7 +108,7 @@ class Arch(Enum):
         # so the filename token decides the family.
         if string in ("minimax-h3", "minimax_h3"):
             return Arch.h3
-        if "h3" in filename or "minimax" in filename:
+        if string == "unknown" and ("h3" in filename or "minimax" in filename):
             return Arch.h3
         if string == "sd15":
             return Arch.sd15

@@ -698,3 +698,13 @@ def test_upscale_without_refine_needs_no_checkpoint():
     assert loader["inputs"]["model_name"] == "4x-AnimeSharp.pth"
     assert "ImageUpscaleWithModel" in class_types(w)
     assert "KSampler" not in class_types(w)
+
+
+def test_filename_only_decides_when_the_server_says_unknown():
+    """Same rule as Anima: a filename must not override what the server reported."""
+    assert (
+        resources.Arch.from_string("sdxl", "eps", "my_h3_style.safetensors") is resources.Arch.sdxl
+    )
+    assert resources.Arch.from_string("flux", "eps", "minimax_lora.safetensors") is (
+        resources.Arch.flux
+    )
