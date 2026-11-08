@@ -42,6 +42,23 @@ scratch. Measured on a 640x544 canvas with a 400x360 selection: no global shift 
 0 px changed outside the selection. Without the pack the workflow falls back to
 `PH3ImageConditioning`, which only sees the crop as a reference image.
 
+## Following Pruna's recommendations
+
+The model card is explicit about what P-H3-Image needs, and the workflow follows it:
+
+- **Prompt upsampler (off by default).** Short requests give weak results, so the model card runs
+  them through the Qwen3.5-9B upsampler first (`TextGenerate`, greedy, the `<Picture 1>` chat
+  template from the official edit workflow). The plumbing is in place
+  (`h3_prompt_upsampler_enabled`), but on 24 GB the 9 GB upsampler and the model do not fit
+  together: with ComfyUI's `--fast` dynamic loading both stage weights on disk and an edit goes
+  from ~3 minutes to over 20. Enable it only where both models fit, or run it as a separate pass.
+- **4 MP edits.** Crops are upscaled to 4 MP (capped at 4x linear) before sampling and scaled back
+  after, per *"edits work best at 4 or 8 MP"*. Expect edits to take a minute rather than seconds.
+- **`euler`** with the 8-step schedule, as in the official workflows.
+- **LoRAs are model only.** P-H3-Image LoRAs (`p-h3-image_lora_bf16`, 2 GB) apply at strength 1.0
+  through `LoraLoaderBypassModelOnly` and turn any MiniMax-H3 FL2VA checkpoint into the P-H3-Image
+  edit model, so a finetune can be used without giving up its style.
+
 Region layers are still unsupported and raise a clear error.
 
 Picking the preset **"MiniMax H3 - distilled 8 steps"** applies the whole table at once. New H3

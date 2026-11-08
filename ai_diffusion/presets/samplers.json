@@ -111,7 +111,7 @@
         "cfg": 5.0
     },
     "MiniMax H3 - distilled 8 steps": {
-        "sampler": "er_sde",
+        "sampler": "euler",
         "scheduler": "manual",
         "steps": 8,
         "minimum_steps": 8,

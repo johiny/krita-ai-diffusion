@@ -491,6 +491,46 @@ class ComfyWorkflow:
             args["images.image_1"] = image
         return self.add("PH3ImageConditioning", 2, **args)
 
+    def h3_prompt_upsample(
+        self, clip: Output, request: str, image: Output | None, aspect: str = "1:1"
+    ):
+        """Rewrite a short request into the detailed prompt P-H3-Image expects.
+
+        Follows the official workflows: Qwen3.5-9B through Generate Text, greedy, with the chat
+        template that references images as ``<Picture N>``.
+        """
+        if image is not None:
+            prompt = (
+                "<|im_start|>user\n"
+                "<Picture 1>: <|vision_start|><|image_pad|><|vision_end|>"
+                f"Edit <Picture 1>. {request}<|im_end|>\n"
+                "<|im_start|>assistant\n thinking\n"
+            )
+            max_length, thinking = 3072, False
+            image = self.add(
+                "ImageScaleToTotalPixels",
+                1,
+                image=image,
+                upscale_method="lanczos",
+                megapixels=1.0,
+                resolution_steps=1,
+            )
+        else:
+            prompt = f"Aspect ratio: {aspect}\nRequest: {request}"
+            max_length, thinking = 2048, True
+        args: dict[str, Any] = {
+            "clip": clip,
+            "prompt": prompt,
+            "max_length": max_length,
+            "sampling_mode": "off",
+            "thinking": thinking,
+            "use_default_template": True,
+            "mtp": "auto",
+        }
+        if image is not None:
+            args["image"] = image
+        return self.add("TextGenerate", 1, **args)
+
     def h3_image_to_image(
         self,
         clip: Output,
@@ -620,6 +660,16 @@ class ComfyWorkflow:
     def load_lora_model(self, model: Output, lora_name: str, strength: float):
         return self.add(
             "LoraLoaderModelOnly", 1, model=model, lora_name=lora_name, strength_model=strength
+        )
+
+    def load_lora_model_bypass(self, model: Output, lora_name: str, strength: float):
+        """Load LoRA (Bypass, Model Only) - what P-H3-Image LoRAs expect."""
+        return self.add(
+            "LoraLoaderBypassModelOnly",
+            1,
+            model=model,
+            lora_name=lora_name,
+            strength_model=strength,
         )
 
     def load_lora(self, model: Output, clip: Output, lora_name, strength_model, strength_clip):

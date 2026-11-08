@@ -187,7 +187,14 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
         model = w.easy_cache(model, arch)
 
     for lora in checkpoint.loras:
-        model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
+        if arch is Arch.h3:
+            # P-H3-Image LoRAs are model only; routing them through the CLIP loader breaks them.
+            if "LoraLoaderBypassModelOnly" in w.node_defs:
+                model = w.load_lora_model_bypass(model, lora.name, lora.strength)
+            else:
+                model = w.load_lora_model(model, lora.name, lora.strength)
+        else:
+            model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
 
     if arch is Arch.sd3:
         model = w.model_sampling_sd3(model)
@@ -1191,6 +1198,9 @@ def refine(
 
 h3_manual_schedulers = ("manual", "p-h3", "distilled")
 
+# See _h3_upsample: only turn this on when the upsampler and the model fit in VRAM together.
+h3_prompt_upsampler_enabled = False
+
 
 def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent, sampling):
     """Second conditioning for CFG. The node has no negative input, so it gets an empty prompt."""
@@ -1263,6 +1273,7 @@ def generate_h3(
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
+    positive = _h3_upsample(w, positive, None, extent.initial, models)
     prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
     negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
@@ -1291,6 +1302,7 @@ def refine_h3(
     in_image = w.load_image(image)
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
+    positive = _h3_upsample(w, positive, in_image, extent.initial, models)
     prompt, latent = _h3_prepare(w, clip.model, vae, positive, extent.initial, in_image, models)
     negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
@@ -1305,6 +1317,63 @@ def refine_h3(
 def _h3_no_regions(cond: Conditioning):
     if len(cond.regions) > 0:
         raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
+def _h3_upsampler(w: ComfyWorkflow, models: ModelDict) -> str | None:
+    """Name of the P-H3 prompt upsampler, if the server has it and the text node exists."""
+    if "TextGenerate" not in w.node_defs:
+        return None
+    candidates = list(models.all.node_inputs.options("CLIPLoader", "clip_name"))
+    candidates += [f for f in models.all.resources.values() if f]
+    for filename in candidates:
+        if "prompt_upsampler" in filename.lower():
+            return filename
+    return None
+
+
+def _h3_aspect(extent: Extent) -> str:
+    divisor = math.gcd(extent.width, extent.height) or 1
+    return f"{extent.width // divisor}:{extent.height // divisor}"
+
+
+def _h3_upsample(
+    w: ComfyWorkflow,
+    prompt: str | Output,
+    image: Output | None,
+    extent: Extent,
+    models: ModelDict,
+):
+    """Rewrite a short request into the prompt P-H3-Image was trained on.
+
+    Off by default: the 9 GB upsampler and the model do not fit in 24 GB together, and ComfyUI
+    runs with dynamic VRAM loading (``--fast``), so both stage weights on disk and an edit goes
+    from ~3 minutes to over 20. Enable it on cards that hold both models, or run it as a separate
+    pass before the main job.
+    """
+    if not h3_prompt_upsampler_enabled:
+        return prompt
+    if not isinstance(prompt, str) or not prompt.strip():
+        return prompt
+    name = _h3_upsampler(w, models)
+    if name is None:
+        return prompt
+    clip = w.load_clip(name, type="minimax")
+    return w.h3_prompt_upsample(clip, prompt, image, _h3_aspect(extent))
+
+
+def _h3_edit_extent(extent: Extent, megapixels: float = 4.0, multiple: int = 32) -> Extent:
+    """Render edits at 4 MP, the resolution the model card recommends (max 4x linear upscale).
+
+    Measured on the 3090 with a 640x544 canvas and a 400x360 selection: 2208x1888 in 165 s, with
+    0 px changed outside the selection and no global shift.
+    """
+    target = megapixels * 1024 * 1024
+    if extent.pixel_count >= target * 0.9:
+        return extent
+    factor = min(math.sqrt(target / extent.pixel_count), 4.0)
+    width = int(extent.width * factor) // multiple * multiple
+    height = int(extent.height * factor) // multiple * multiple
+    return Extent(max(multiple, width), max(multiple, height))
 
 
 def _h3_prepare(
@@ -1404,13 +1473,13 @@ def inpaint_h3(
     region = w.crop_image(in_image, context_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = _h3_prepare(
-        w, clip.model, vae, positive, context_bounds.extent, region, models
-    )
-    negative = _h3_negative(w, cond, clip, vae, context_bounds.extent, sampling)
-    out_latent = _h3_sample(
-        w, model, prompt, negative, latent, sampling, context_bounds.extent, models
-    )
+    edit_extent = _h3_edit_extent(context_bounds.extent)
+    if edit_extent != context_bounds.extent:
+        region = w.scale_image(region, edit_extent)
+    positive = _h3_upsample(w, positive, region, edit_extent, models)
+    prompt, latent = _h3_prepare(w, clip.model, vae, positive, edit_extent, region, models)
+    negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     # The model rounds the extent (180 -> 176), so bring it back to the exact crop size.
     out_image = w.scale_image(out_image, context_bounds.extent)

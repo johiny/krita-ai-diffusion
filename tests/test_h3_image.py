@@ -476,9 +476,10 @@ def test_selection_crops_and_composites():
 
     (ph3,) = nodes_of(w, "PH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
-    # 256 selection + 64 px of context on each side: the model needs to see the surroundings
-    assert ph3["inputs"]["width"] == 384
-    assert ph3["inputs"]["height"] == 384
+    # 256 selection + 64 px of context on each side: the model needs to see the surroundings.
+    # Then rendered at 4 MP (capped at 4x linear) - 384 * 4 = 1536.
+    assert ph3["inputs"]["width"] == 1536
+    assert ph3["inputs"]["height"] == 1536
     assert class_types(w).count("ImageCrop") == 2  # context crop in, selection crop back out
     # The patch goes back into the untouched image at the selection offset, so nothing else moves.
     (composite,) = nodes_of(w, "ImageCompositeMasked")
