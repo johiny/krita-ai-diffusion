@@ -269,7 +269,7 @@ class DocumentModel(QObject, ObservableProperties):
         seed = self.seed if self.fixed_seed else workflow.generate_seed()
         ref_layers: dict[str, int] | None = None
         if not dryrun:
-            conditioning, ref_layers = self._add_reference_layers(conditioning)
+            conditioning, ref_layers = self._add_reference_layers(conditioning, workflow_kind)
 
         original_conditioning = conditioning
         inpaint_instruction = inpaint_mode if is_one(strength) else None
@@ -496,7 +496,7 @@ class DocumentModel(QObject, ObservableProperties):
 
         conditioning, job_regions = process_regions(regions, bounds)
         conditioning.language = self.prompt_translation_language
-        conditioning, ref_layers = self._add_reference_layers(conditioning)
+        conditioning, ref_layers = self._add_reference_layers(conditioning, workflow_kind)
         conditioning, loras, _ = workflow.prepare_prompts(
             conditioning, self.style, self.seed, self.arch, None, ref_layers, is_live=True
         )
@@ -946,7 +946,9 @@ class DocumentModel(QObject, ObservableProperties):
             return InpaintMode.fill
         return self.inpaint.mode
 
-    def _add_reference_layers(self, cond: ConditioningInput):
+    def _add_reference_layers(
+        self, cond: ConditioningInput, kind: WorkflowKind | None = None
+    ):
         def add_refs(control: list[ControlInput], layer_names: dict[str, int]):
             layers_sorted = sorted(layer_names.items(), key=lambda x: x[1])
             for layer_name, __ in layers_sorted:
@@ -956,7 +958,11 @@ class DocumentModel(QObject, ObservableProperties):
                 ctrl = ControlLayer(self, ControlMode.reference, uid, 0)
                 control.append(ctrl.to_api())
 
-        cond.edit_reference = self.is_editing
+        # H3 always puts the input image in <Picture 1> when the job has one, and reference layers
+        # follow from there: number the `<layer:name>` tokens from 2 even when edit mode is off,
+        # otherwise a reference would be called <Picture 1> like the canvas it is editing.
+        has_canvas = kind is not None and kind is not WorkflowKind.generate
+        cond.edit_reference = self.is_editing or (self.arch is Arch.h3 and has_canvas)
         layers = extract_layers(cond)
         add_refs(cond.control, layers)
 

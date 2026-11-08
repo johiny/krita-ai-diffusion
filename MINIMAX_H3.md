@@ -88,12 +88,63 @@ row: in a 512x512 A/B test, `dpmpp_2m + karras + 12 steps` returned an abstract 
 instead of the prompted scene, while `dpmpp_2m` with the manual schedule stayed coherent. Use the
 free knobs to explore, not as a quality guarantee.
 
+## References (multiple images)
+
+H3 has no IP-Adapter: reference layers travel inside the conditioning. Put the pictures on control
+layers with mode **Reference** and the plugin wires them into the conditioning node:
+
+| pictures | conditioning | notes |
+| --- | --- | --- |
+| canvas only | `image_to_image (FL2VA)` | the latent is seeded from the canvas |
+| canvas + 1..8 references | `reference_edit (REF2VA)` | canvas is `<Picture 1>`, references follow as `<Picture 2>`..`<Picture 9>` |
+| no canvas, 1..8 references | `reference_edit (REF2VA)` | the first reference becomes `<Picture 1>`: a text-to-image built from references |
+
+The limit is nine pictures per job (one plus eight references); the plugin rejects the ninth
+reference instead of dropping it. Both `H3ImagePrepare` (Image Studio) and the fallback
+`PH3ImageConditioning` (p-h3) receive them, the difference being `reference_image_N` slots versus
+`images.image_N` autogrow inputs.
+
+Edits get a guide line before the prompt — *"Take only the traits the instruction assigns to a
+reference picture and keep everything else from `<Picture 1>`"* — because the node tells the model
+to copy a trait from whichever picture the prompt assigns it to. Measured on a 512x512 edit: with a
+loose prompt ("lilac hair like `<Picture 2>`") the output became the reference, background included
+(mean distance 63 from the canvas, 27 from the reference); with the guide the canvas stayed in
+charge (distance 3 from the canvas) and only the hair colour changed.
+
+Plain text-to-image from references skips that guide: there is no canvas to preserve, so the
+description decides and the node's own rules take over.
+
+### Naming the pictures
+
+Write `<layer:Layer name>` in the prompt. The plugin adds that layer as a reference (the layer only
+has to exist; it does not need to be switched to Reference mode by hand) and replaces the token with
+`<Picture N>`:
+
+```
+Change only the hair to the colour of <layer:Hair ref>, keep the pose and the background.
+```
+
+- In an edit the canvas is `<Picture 1>`, so the named layers start at `<Picture 2>`. You do not
+  have to write `<Picture 1>` yourself: every edit gets a guide that names it as the picture on the
+  canvas and says the instruction refers to it unless another picture is named.
+- In a text-to-image job there is no canvas, so the first named layer is `<Picture 1>`.
+- Reference layers added by hand work too: they are numbered in layer order, after any named ones.
+- Pose, depth and scribble layers are not converted — H3 has no ControlNet, so those modes stay
+  unsupported and the UI says so.
+
+Naming the role is what the model keys on: the node warns when a connected picture is never
+mentioned, and adherence drops when a picture has no stated job.
+
 ## Performance
 
 - 512x512, one 21 GB finetune, warm model: ~14-20 s per image (`er_sde`, 8 steps).
 - First load of a 21 GB checkpoint dominates (~40-90 s).
 - The distilled `p-h3-image_w4a8` (12.4 GB) is the one that comfortably reaches 8 MP on a 3090;
   the finetunes are tight at that resolution.
+- References switch the conditioning to REF2VA and cost a different amount: 24-34 s for 512x512 and
+  1024x1024 with `h3ErosMax`, and 1024x1024 already peaks at 23.8 GB of VRAM, so **do not run the
+  reference path at 4 MP on a 24 GB card**. `reference_size` barely matters for memory
+  (`max_identity_2048` 23.8 GB vs `match_generation_area` 23.8 GB), only for time (34 s vs 27 s).
 
 ## Performance (RTX 3090, `--fast` dynamic VRAM loading)
 

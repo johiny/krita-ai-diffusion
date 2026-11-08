@@ -8,6 +8,7 @@ import asyncio
 import dataclasses
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,7 @@ from ai_diffusion.backend import resources, workflow
 from ai_diffusion.backend.api import (
     CheckpointInput,
     ConditioningInput,
+    ControlInput,
     ExtentInput,
     ImageInput,
     InpaintMode,
@@ -165,13 +167,19 @@ def with_h3_image_studio(models: ClientModels) -> ClientModels:
                 "prompt": ["STRING", {"default": ""}],
                 "width": ["INT", {"default": 1024}],
                 "height": ["INT", {"default": 1024}],
-                "mode": ["COMBO", {"options": ["image_to_image (FL2VA)"]}],
+                "mode": [
+                    "COMBO",
+                    {"options": ["image_to_image (FL2VA)", "reference_edit (REF2VA)"]},
+                ],
                 "frame_preset": ["COMBO", {"options": ["single image | 1 frame (image VAE)"]}],
                 "optimize_prompt": ["BOOLEAN", {"default": True}],
                 "preserve_strength": ["FLOAT", {"default": 0.6}],
                 "source_fit": ["COMBO", {"options": ["crop_center"]}],
                 "reference_size": ["COMBO", {"options": ["match_generation_area"]}],
-            }
+            },
+            "optional": {
+                **{f"reference_image_{i}": ["IMAGE", {}] for i in range(2, 10)},
+            },
         },
         "output": ["CONDITIONING", "LATENT"],
     }
@@ -605,6 +613,173 @@ def test_edit_seeds_the_latent_from_the_image_when_available():
     assert "PH3ImageConditioning" not in class_types(w)
     # El latent viene del nodo, no de un VAEEncode: no se puede codificar aparte.
     assert "VAEEncode" not in class_types(w)
+
+
+# --- references (REF2VA) ----------------------------------------------------
+
+def refs(count: int) -> list:
+    return [
+        ControlInput(resources.ControlMode.reference, Image.create(Extent(32, 32)), 1.0)
+        for _ in range(count)
+    ]
+
+
+def edit_workflow(models, reference_count: int):
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.refine,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("make the dress red", "", control=refs(reference_count)),
+        sampling=sampling(),
+        batch_count=1,
+    )
+    return workflow.create(wf_input, models)
+
+
+def generate_workflow(models, reference_count: int):
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.generate,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("a woman in a red dress", "", control=refs(reference_count)),
+        sampling=sampling(),
+        batch_count=1,
+    )
+    return workflow.create(wf_input, models)
+
+
+def test_edit_with_references_switches_to_ref2va():
+    models = with_h3_image_studio(client_models())
+    w = edit_workflow(models, 2)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    inputs = prepare["inputs"]
+    assert inputs["mode"] == "reference_edit (REF2VA)"
+    assert "reference_image_2" in inputs
+    assert "reference_image_3" in inputs
+    assert "reference_image_4" not in inputs
+    # El lienzo sigue siendo <Picture 1>.
+    assert isinstance(inputs["source_image"], list)
+    assert "ETN_LoadImageCache" in class_types(w)
+
+
+def test_edit_reference_prompt_keeps_picture_1_in_charge():
+    models = with_h3_image_studio(client_models())
+    w = edit_workflow(models, 1)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    prompt = prepare["inputs"]["prompt"]
+    assert prompt.startswith("Edit <Picture 1>, the picture currently on the canvas.")
+    assert "The instruction refers to <Picture 1> unless it names another picture." in prompt
+    assert "keep everything else in <Picture 1> unchanged" in prompt
+    assert prompt.endswith("make the dress red")
+
+
+def test_edit_without_references_stays_image_to_image():
+    models = with_h3_image_studio(client_models())
+    w = edit_workflow(models, 0)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    assert prepare["inputs"]["mode"] == "image_to_image (FL2VA)"
+    assert not any(k.startswith("reference_image_") for k in prepare["inputs"])
+    assert not prepare["inputs"]["prompt"].startswith("Edit <Picture 1>.")
+
+
+def test_generate_with_references_builds_the_subject_from_them():
+    models = with_h3_image_studio(client_models())
+    w = generate_workflow(models, 2)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    inputs = prepare["inputs"]
+    assert inputs["mode"] == "reference_edit (REF2VA)"
+    assert "reference_image_2" in inputs
+    assert "reference_image_3" not in inputs  # la primera referencia es <Picture 1>
+    assert inputs["prompt"].startswith("Create one finished still image")
+    assert "<Picture 1>, <Picture 2>" in inputs["prompt"]
+
+
+def test_more_than_eight_references_is_rejected():
+    models = with_h3_image_studio(client_models())
+    with pytest.raises(PluginError, match="at most 8 reference layers"):
+        edit_workflow(models, 9)
+
+
+def test_references_reach_the_fallback_node_too():
+    # Sin el pack de H3 Image Studio, el nodo p-h3 recibe las mismas imágenes como autogrow.
+    models = client_models()
+    w = edit_workflow(models, 2)
+
+    (ph3,) = nodes_of(w, "PH3ImageConditioning")
+    assert "images.image_1" in ph3["inputs"]
+    assert "images.image_2" in ph3["inputs"]
+    assert "images.image_3" in ph3["inputs"]
+
+
+# --- <layer:name> syntax ----------------------------------------------------
+
+def test_layer_placeholders_become_picture_tags():
+    from ai_diffusion.text import replace_layers
+
+    template = workflow._layer_replace[resources.Arch.h3]
+    text = "Change her hair to the colour of <layer:Hair> and the dress from <layer:Dress>."
+    assert replace_layers(text, {"Hair": 2, "Dress": 3}, template) == (
+        "Change her hair to the colour of <Picture 2> and the dress from <Picture 3>."
+    )
+
+
+def test_layer_placeholders_are_numbered_after_the_canvas():
+    from ai_diffusion.text import extract_layers
+
+    text = "<layer:Hair> plus <layer:Dress> plus <layer:Hair> again"
+    editing = ConditioningInput(text, "", edit_reference=True)
+    generating = ConditioningInput(text, "", edit_reference=False)
+    assert extract_layers(editing) == {"Hair": 2, "Dress": 3}
+    assert extract_layers(generating) == {"Hair": 1, "Dress": 2}
+
+
+def test_control_net_layers_are_not_silently_rewritten_for_h3():
+    """H3 has no ControlNet: pose/depth layers stay unsupported instead of becoming references."""
+    e = Extent(64, 64)
+    cond = ConditioningInput(
+        "keep the pose",
+        "",
+        control=[ControlInput(resources.ControlMode.pose, Image.create(e), 1.0)],
+        edit_reference=True,
+    )
+    assert not resources.ControlMode.pose.can_substitute_instruction(resources.Arch.h3)
+    assert workflow.build_instructions(cond, resources.Arch.h3, None) == "keep the pose"
+    assert cond.control[0].mode is resources.ControlMode.pose
+
+
+def test_prompt_with_layer_names_reaches_the_conditioning_as_picture_tags():
+    from ai_diffusion.style import Style
+
+    cond = ConditioningInput(
+        "Change only the hair to the colour of <layer:Hair>, keep <Picture 1> intact.",
+        "",
+        control=[ControlInput(resources.ControlMode.reference, Image.create(Extent(32, 32)), 1.0)],
+        edit_reference=True,
+    )
+    prepared, _, meta = workflow.prepare_prompts(
+        cond, Style(Path("h3-test.json")), 1234, resources.Arch.h3, None, {"Hair": 2}
+    )
+    assert "<Picture 2>" in prepared.positive
+    assert "<layer:" not in prepared.positive
+    assert "<Picture 2>" in meta["prompt_final"]
+
+
+def test_edit_prompt_does_not_have_to_name_the_canvas():
+    """The guide states which picture the instruction refers to, so <Picture 1> is optional."""
+    models = with_h3_image_studio(client_models())
+    w = edit_workflow(models, 1)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    prompt = prepare["inputs"]["prompt"]
+    body = prompt.split("\n\n", 1)[1]
+    assert "<Picture 1>" not in body  # el usuario no lo escribió
+    assert prompt.count("<Picture 1>") >= 2  # el guía lo dice dos veces
 
 
 def test_prompt_upsampler_runs_as_its_own_job(monkeypatch):

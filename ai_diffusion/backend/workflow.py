@@ -1265,12 +1265,25 @@ def generate_h3(
     misc: MiscParams,
     models: ModelDict,
 ):
-    """MiniMax H3 text-to-image. Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md."""
+    """MiniMax H3 text-to-image. With reference layers it becomes reference-to-image (REF2VA).
+
+    There is no canvas to edit, so the first reference becomes <Picture 1> and the rest are
+    <Picture 2>..<Picture 9>: the model builds the subject from them as the prompt describes.
+    Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md.
+    """
     _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_merge_guide(len(references)))
+        source, extra = references[0], references[1:]
+        prompt, latent = _h3_prepare(
+            w, clip.model, vae, positive, extent.initial, source, models, extra
+        )
+    else:
+        prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
     negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
@@ -1291,14 +1304,23 @@ def refine_h3(
     misc: MiscParams,
     models: ModelDict,
 ):
-    """P-H3 Image edit: the current canvas is passed as reference image 1."""
+    """P-H3 Image edit: the current canvas is <Picture 1>, reference layers follow.
+
+    Without references this is plain image-to-image; with them the conditioning switches to REF2VA
+    and the prompt is prefixed so the canvas keeps winning over the references.
+    """
     _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     in_image = w.load_image(image)
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = _h3_prepare(w, clip.model, vae, positive, extent.initial, in_image, models)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_edit_guide())
+    prompt, latent = _h3_prepare(
+        w, clip.model, vae, positive, extent.initial, in_image, models, references
+    )
     negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
@@ -1312,6 +1334,56 @@ def refine_h3(
 def _h3_no_regions(cond: Conditioning):
     if len(cond.regions) > 0:
         raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
+# H3ImagePrepare takes <Picture 1> (the image being edited) plus eight reference sockets.
+h3_max_references = 8
+
+
+def _h3_references(w: ComfyWorkflow, cond: Conditioning) -> list[Output]:
+    """Reference layers in drawing order; they become <Picture 2>..<Picture 9>.
+
+    H3 has no IP-Adapter: the references travel inside the conditioning, so they are collected
+    here instead of being applied to the model.
+    """
+    images = [c.image.load(w) for c in cond.all_control if c.mode.is_ip_adapter]
+    if len(images) > h3_max_references:
+        raise PluginError(
+            _("MiniMax H3 takes at most 8 reference layers. Merge some of them into one image.")
+        )
+    return images
+
+
+def _h3_edit_guide() -> str:
+    """Make <Picture 1> win over the references.
+
+    The node tells the model to copy a trait from the picture it is assigned to, so a loose
+    instruction ("lilac hair like <Picture 2>") also drags the reference's outfit and background
+    along; measured, the output became the reference instead of the edit.
+    """
+    # `<Picture 1>` is spelled out with its role, and instructions that name no picture are said to
+    # refer to it, so the prompt does not have to mention the canvas at all.
+    # No "outfit" in the preserved list: clothing is the most common thing to change, and listing it
+    # made the model keep the canvas outfit even when the instruction asked for the reference one.
+    return (
+        "Edit <Picture 1>, the picture currently on the canvas. The instruction refers to <Picture 1> "
+        "unless it names another picture. Take only the traits it assigns to another picture and keep "
+        "everything else in <Picture 1> unchanged: identity, pose, framing and background."
+    )
+
+
+def _h3_merge_guide(picture_count: int) -> str:
+    """There is no canvas to preserve, so the references are the subject and the description rules."""
+    pictures = ", ".join(f"<Picture {index}>" for index in range(1, picture_count + 1))
+    return f"Create one finished still image that takes its subject from {pictures}, as described."
+
+
+def _h3_prepend(w: ComfyWorkflow, prompt: str | Output, guide: str) -> str | Output:
+    if isinstance(prompt, str):
+        return f"{guide}\n\n{prompt}" if prompt else guide
+    if "StringConcatenate" in w.node_defs:
+        return w.add("StringConcatenate", 1, string_a=f"{guide}\n\n", string_b=prompt, delimiter="")
+    return prompt  # an already encoded prompt (translation node) cannot be prefixed safely
 
 
 def _h3_edit_extent(extent: Extent, megapixels: float = 4.0, multiple: int = 32) -> Extent:
@@ -1337,6 +1409,7 @@ def _h3_prepare(
     extent: Extent,
     image: Output | None,
     models: ModelDict,
+    references: list[Output] | None = None,
 ):
     """Build the H3 conditioning and its latent.
 
@@ -1345,8 +1418,8 @@ def _h3_prepare(
     Falls back to the reference-image conditioning of the p-h3 node when the pack is missing.
     """
     if image is not None and "H3ImagePrepare" in w.node_defs:
-        return w.h3_image_to_image(clip, vae, prompt, image, extent)
-    return w.h3_conditioning(clip, vae, prompt, extent, image=image)
+        return w.h3_image_to_image(clip, vae, prompt, image, extent, references=references)
+    return w.h3_conditioning(clip, vae, prompt, extent, image=image, references=references)
 
 
 def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
@@ -1426,10 +1499,15 @@ def inpaint_h3(
     region = w.crop_image(in_image, context_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_edit_guide())
     edit_extent = _h3_edit_extent(context_bounds.extent)
     if edit_extent != context_bounds.extent:
         region = w.scale_image(region, edit_extent)
-    prompt, latent = _h3_prepare(w, clip.model, vae, positive, edit_extent, region, models)
+    prompt, latent = _h3_prepare(
+        w, clip.model, vae, positive, edit_extent, region, models, references
+    )
     negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
@@ -1800,6 +1878,7 @@ _layer_replace = {
     Arch.flux2_9b: "image {}",
     Arch.qwen_e_p: "Picture {}",
     Arch.qwen2: "<image{}>",
+    Arch.h3: "<Picture {}>",
 }
 _control_instructions = {
     ControlMode.style: "Apply the style from {}.",

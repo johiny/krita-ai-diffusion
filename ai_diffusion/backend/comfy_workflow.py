@@ -475,10 +475,12 @@ class ComfyWorkflow:
         prompt: str | Output,
         extent: Extent,
         image: Output | None = None,
+        references: list[Output] | None = None,
     ):
         """MiniMax H3 conditioning. Returns (conditioning, latent) - the node builds its own latent.
 
-        Reference images are flattened as ``images.image_N`` keys (autogrow inputs).
+        Reference images are flattened as ``images.image_N`` keys (autogrow inputs). The first
+        picture is the one being edited, the rest are references.
         """
         args: dict[str, Any] = {
             "clip": clip,
@@ -489,6 +491,8 @@ class ComfyWorkflow:
         }
         if image is not None:
             args["images.image_1"] = image
+        for index, reference in enumerate(references or [], start=2):
+            args[f"images.image_{index}"] = reference
         return self.add("PH3ImageConditioning", 2, **args)
 
     def h3_prompt_upsample(
@@ -539,28 +543,33 @@ class ComfyWorkflow:
         image: Output,
         extent: Extent,
         preserve: float = 0.6,
+        references: list[Output] | None = None,
     ):
-        """MiniMax H3 image-to-image conditioning (H3 Image Studio).
+        """MiniMax H3 image conditioning (H3 Image Studio).
 
-        Starts the latent from the source image instead of an empty one, so the model keeps the
-        composition and only applies the instruction. Returns (conditioning, latent).
+        Without references it seeds the latent from the source image, so the edit keeps the
+        composition and only applies the instruction. With references it switches to REF2VA: the
+        source is ``<Picture 1>`` and every reference becomes ``<Picture 2>``..``<Picture 9>``, which
+        the model copies traits from when the prompt assigns them. Returns (conditioning, latent).
         """
-        return self.add(
-            "H3ImagePrepare",
-            2,
-            clip=clip,
-            vae=vae,
-            prompt=prompt,
-            source_image=image,
-            width=extent.width,
-            height=extent.height,
-            mode="image_to_image (FL2VA)",
-            frame_preset="single image | 1 frame (image VAE)",
-            optimize_prompt=True,
-            preserve_strength=preserve,
-            source_fit="crop_center",
-            reference_size="match_generation_area",
-        )
+        references = references or []
+        args: dict[str, Any] = {
+            "clip": clip,
+            "vae": vae,
+            "prompt": prompt,
+            "source_image": image,
+            "width": extent.width,
+            "height": extent.height,
+            "mode": "reference_edit (REF2VA)" if references else "image_to_image (FL2VA)",
+            "frame_preset": "single image | 1 frame (image VAE)",
+            "optimize_prompt": True,
+            "preserve_strength": preserve,
+            "source_fit": "crop_center",
+            "reference_size": "match_generation_area",
+        }
+        for index, reference in enumerate(references[:8], start=2):
+            args[f"reference_image_{index}"] = reference
+        return self.add("H3ImagePrepare", 2, **args)
 
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
