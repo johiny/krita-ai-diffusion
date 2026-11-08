@@ -340,7 +340,7 @@ def test_default_cfg_uses_basic_guider():
     assert "CFGGuider" not in types
 
 
-def test_strength_blends_the_regeneration_with_the_original():
+def test_strength_does_not_change_the_graph():
     models = client_models()
     e = Extent(512, 512)
 
@@ -355,13 +355,12 @@ def test_strength_blends_the_regeneration_with_the_original():
         )
         return workflow.create(wf_input, models)
 
-    w = graph(0)
-    assert "ImageBlend" not in class_types(w)
-
-    w = graph(4)  # strength 0.5
-    (blend,) = nodes_of(w, "ImageBlend")
-    assert math.isclose(blend["inputs"]["blend_factor"], 0.5)
-    assert "VAEEncode" not in class_types(w)  # the model needs its own paired latent
+    full = graph(0)
+    partial = graph(4)
+    assert class_types(full) == class_types(partial)
+    assert "ImageBlend" not in class_types(partial)
+    sigmas = nodes_of(partial, "ManualSigmas")
+    assert len(sigmas[0]["inputs"]["sigmas"].split(",")) == 9  # siempre la agenda destilada
 
 
 def test_clip_loader_uses_minimax_type():

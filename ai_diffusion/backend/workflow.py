@@ -1192,19 +1192,6 @@ def refine(
 h3_manual_schedulers = ("manual", "p-h3", "distilled")
 
 
-def _h3_apply_strength(
-    w: ComfyWorkflow, result: Output, original: Output, sampling: SamplingInput
-) -> Output:
-    """H3 has no denoise, so strength blends the regenerated image with the original.
-
-    1.0 returns the regeneration untouched, 0.0 would return the original.
-    """
-    strength = sampling.denoise_strength
-    if strength >= 0.999:
-        return result
-    return w.image_blend(result, original, 1.0 - strength)
-
-
 def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent, sampling):
     """Second conditioning for CFG. The node has no negative input, so it gets an empty prompt."""
     if sampling.cfg_scale <= 1.0:
@@ -1309,7 +1296,6 @@ def refine_h3(
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
-    out_image = _h3_apply_strength(w, out_image, in_image, sampling)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     out_image = scale_to_target(extent, w, out_image, models)
     w.send_image(out_image)
@@ -1365,7 +1351,6 @@ def inpaint_h3(
     )
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.color_match(out_image, region, region_mask, misc.color_match)
-    out_image = _h3_apply_strength(w, out_image, region, sampling)
     if initial_bounds.extent != target_bounds.extent:
         out_image = w.scale_image(out_image, target_bounds.extent)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)

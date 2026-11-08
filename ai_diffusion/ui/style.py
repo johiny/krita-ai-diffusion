@@ -563,7 +563,9 @@ class SamplerWidget(QWidget):
         if preset.lora:
             text += f" +LoRA '{preset.lora}'"
         if self._h3_mode:
-            text += " · " + _("recommended: 8 steps, er_sde, manual schedule, CFG 1.0")
+            text += " · " + _(
+                "recommended: 8 steps, er_sde, manual schedule, CFG 1.0 · strength is ignored"
+            )
         self._sampler_info.setText(text)
 
     def _open_user_presets(self):

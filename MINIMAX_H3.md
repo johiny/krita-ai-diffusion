@@ -38,9 +38,9 @@ The graph passes whatever the style provides, so you can experiment freely:
   the trajectory (the step slider has no effect there).
 - **CFG** - values above 1.0 add a second `PH3ImageConditioning` (empty or user negative prompt)
   and a `CFGGuider`.
-- **Strength** - the model cannot denoise, so in Refine (and with a selection) strength blends the
-  regeneration with the original image: 1.0 is the full edit, 0.3 keeps most of the original. It is
-  a cross-fade, not a denoise: low values look softer rather than more faithful.
+- **Strength** - ignored. The model has no denoise step and its latent is a paired video+audio
+  tensor from `PH3ImageConditioning`, so it cannot start from a partially noised image. The slider
+  stays visible but changes nothing; a selection is always fully regenerated.
 
 Nothing blocks a combination. Be aware that the distilled model is only tuned for the recommended
 row: in a 512x512 A/B test, `dpmpp_2m + karras + 12 steps` returned an abstract colour field
