@@ -382,7 +382,12 @@ class ComfyWorkflow:
         steps=20,
         arch=Arch.sdxl,
         extent: Extent | None = None,
+        denoise=1.0,
     ):
+        if scheduler == "manual":
+            # Sentinel used by the MiniMax H3 preset; other architectures need a real scheduler.
+            log.warning("Scheduler 'manual' is only supported by MiniMax H3, using 'normal'")
+            scheduler = "normal"
         if scheduler in ("align_your_steps", "ays"):
             assert arch is Arch.sd15 or arch.is_sdxl_like
 
@@ -396,7 +401,7 @@ class ComfyWorkflow:
                 output_count=1,
                 steps=steps,
                 model_type=model_type,
-                denoise=1.0,
+                denoise=denoise,
             )
         elif scheduler == "gits":
             return self.add(
@@ -441,7 +446,7 @@ class ComfyWorkflow:
                 model=model,
                 scheduler=scheduler,
                 steps=steps,
-                denoise=1.0,
+                denoise=denoise,
             )
 
     def split_sigmas(self, sigmas: Output, step=0):
@@ -454,6 +459,108 @@ class ComfyWorkflow:
 
     def basic_guider(self, model: Output, positive: Output):
         return self.add("BasicGuider", 1, model=model, conditioning=positive)
+
+    def h3_sigma_shift(self, model: Output, shift_video=1.0, shift_audio=1.0):
+        return self.add(
+            "MiniMaxH3SigmaShift", 1, model=model, shift_video=shift_video, shift_audio=shift_audio
+        )
+
+    def manual_sigmas(self, sigmas: str):
+        return self.add("ManualSigmas", 1, sigmas=sigmas)
+
+    def h3_conditioning(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        extent: Extent,
+        image: Output | None = None,
+    ):
+        """MiniMax H3 conditioning. Returns (conditioning, latent) - the node builds its own latent.
+
+        Reference images are flattened as ``images.image_N`` keys (autogrow inputs).
+        """
+        args: dict[str, Any] = {
+            "clip": clip,
+            "vae": vae,
+            "prompt": prompt,
+            "width": extent.width,
+            "height": extent.height,
+        }
+        if image is not None:
+            args["images.image_1"] = image
+        return self.add("PH3ImageConditioning", 2, **args)
+
+    def h3_prompt_upsample(
+        self, clip: Output, request: str, image: Output | None, aspect: str = "1:1"
+    ):
+        """Rewrite a short request into the detailed prompt P-H3-Image expects.
+
+        Follows the official workflows: Qwen3.5-9B through Generate Text, greedy, with the chat
+        template that references images as ``<Picture N>``.
+        """
+        if image is not None:
+            prompt = (
+                "<|im_start|>user\n"
+                "<Picture 1>: <|vision_start|><|image_pad|><|vision_end|>"
+                f"Edit <Picture 1>. {request}<|im_end|>\n"
+                "<|im_start|>assistant\n thinking\n"
+            )
+            max_length, thinking = 3072, False
+            image = self.add(
+                "ImageScaleToTotalPixels",
+                1,
+                image=image,
+                upscale_method="lanczos",
+                megapixels=1.0,
+                resolution_steps=1,
+            )
+        else:
+            prompt = f"Aspect ratio: {aspect}\nRequest: {request}"
+            max_length, thinking = 2048, True
+        args: dict[str, Any] = {
+            "clip": clip,
+            "prompt": prompt,
+            "max_length": max_length,
+            "sampling_mode": "off",
+            "thinking": thinking,
+            "use_default_template": True,
+            "mtp": "auto",
+        }
+        if image is not None:
+            args["image"] = image
+        return self.add("TextGenerate", 1, **args)
+
+    def h3_image_to_image(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        image: Output,
+        extent: Extent,
+        preserve: float = 0.6,
+    ):
+        """MiniMax H3 image-to-image conditioning (H3 Image Studio).
+
+        Starts the latent from the source image instead of an empty one, so the model keeps the
+        composition and only applies the instruction. Returns (conditioning, latent).
+        """
+        return self.add(
+            "H3ImagePrepare",
+            2,
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            source_image=image,
+            width=extent.width,
+            height=extent.height,
+            mode="image_to_image (FL2VA)",
+            frame_preset="single image | 1 frame (image VAE)",
+            optimize_prompt=True,
+            preserve_strength=preserve,
+            source_fit="crop_center",
+            reference_size="match_generation_area",
+        )
 
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
@@ -553,6 +660,16 @@ class ComfyWorkflow:
     def load_lora_model(self, model: Output, lora_name: str, strength: float):
         return self.add(
             "LoraLoaderModelOnly", 1, model=model, lora_name=lora_name, strength_model=strength
+        )
+
+    def load_lora_model_bypass(self, model: Output, lora_name: str, strength: float):
+        """Load LoRA (Bypass, Model Only) - what P-H3-Image LoRAs expect."""
+        return self.add(
+            "LoraLoaderBypassModelOnly",
+            1,
+            model=model,
+            lora_name=lora_name,
+            strength_model=strength,
         )
 
     def load_lora(self, model: Output, clip: Output, lora_name, strength_model, strength_clip):

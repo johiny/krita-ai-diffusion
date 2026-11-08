@@ -109,5 +109,12 @@
         "steps": 20,
         "minimum_steps": 3,
         "cfg": 5.0
+    },
+    "MiniMax H3 - distilled 8 steps": {
+        "sampler": "euler",
+        "scheduler": "manual",
+        "steps": 8,
+        "minimum_steps": 8,
+        "cfg": 1.0
     }
 }

@@ -18,7 +18,7 @@ from ..text import (
     replace_layers,
     strip_prompt_comments,
 )
-from ..util import ensure, median_or_zero, unique
+from ..util import PluginError, ensure, median_or_zero, unique
 from . import resolution, resources
 from .api import (
     CheckpointInput,
@@ -55,6 +55,10 @@ def detect_inpaint_mode(extent: Extent, area: Bounds):
     if area.width >= extent.width or area.height >= extent.height:
         return InpaintMode.expand
     return InpaintMode.fill
+
+
+# P-H3 Image is distilled for exactly this 8-step schedule (8 sampling steps, 9 sigmas).
+h3_sigmas = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
 
 
 def generate_seed():
@@ -165,6 +169,8 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
                 clip = w.load_clip(te["qwen_3vl_4b"], type="krea2")
             case Arch.qwen2:
                 clip = w.load_clip(te["qwen_3vl_8b"], type="qwen_image")
+            case Arch.h3:
+                clip = w.load_clip(te["minimax"], type="minimax")
             case _:
                 raise RuntimeError(f"No text encoder for model architecture {arch.name}")
 
@@ -181,7 +187,14 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
         model = w.easy_cache(model, arch)
 
     for lora in checkpoint.loras:
-        model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
+        if arch is Arch.h3:
+            # P-H3-Image LoRAs are model only; routing them through the CLIP loader breaks them.
+            if "LoraLoaderBypassModelOnly" in w.node_defs:
+                model = w.load_lora_model_bypass(model, lora.name, lora.strength)
+            else:
+                model = w.load_lora_model(model, lora.name, lora.strength)
+        else:
+            model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
 
     if arch is Arch.sd3:
         model = w.model_sampling_sd3(model)
@@ -1183,6 +1196,260 @@ def refine(
     return w
 
 
+h3_manual_schedulers = ("manual", "p-h3", "distilled")
+
+
+def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent, sampling):
+    """Second conditioning for CFG. The node has no negative input, so it gets an empty prompt."""
+    if sampling.cfg_scale <= 1.0:
+        return None
+    text = cond.negative.prepare(w) if cond.negative is not None else ""
+    negative, _ = w.h3_conditioning(clip.model, vae, text, extent)
+    return negative
+
+
+def _h3_sampler(sampling: SamplingInput, models: ModelDict):
+    """Use the requested sampler when ComfyUI has it, otherwise the distilled default."""
+    available = models.all.node_inputs.options("KSamplerSelect", "sampler_name")
+    return sampling.sampler if sampling.sampler in available else "er_sde"
+
+
+def _h3_sample(
+    w: ComfyWorkflow,
+    model: Output,
+    prompt: Output,
+    negative: Output | None,
+    latent: Output,
+    sampling: SamplingInput,
+    extent: Extent,
+    models: ModelDict,
+):
+    """Everything here is the user's choice; recommended values are documented in MINIMAX_H3.md.
+
+    Scheduler "manual" is the distilled 8-step schedule the model ships with. Any other scheduler
+    is passed through to ComfyUI, as are the sampler and the step count. CFG > 1 adds a second
+    conditioning node and a CFGGuider.
+    """
+    if negative is not None:
+        guider = w.cfg_guider(model, ConditioningOutput(prompt, negative), sampling.cfg_scale)
+    else:
+        guider = w.basic_guider(model, prompt)
+    if sampling.scheduler.lower() in h3_manual_schedulers:
+        sigmas_node = w.manual_sigmas(h3_sigmas)
+    else:
+        sigmas_node = w.scheduler_sigmas(
+            model,
+            sampling.scheduler,
+            sampling.total_steps,
+            models.arch,
+            extent,
+            denoise=sampling.denoise_strength,
+        )
+    return w.add(
+        "SamplerCustomAdvanced",
+        output_count=2,
+        noise=w.random_noise(sampling.seed),
+        guider=guider,
+        sampler=w.sampler_select(_h3_sampler(sampling, models)),
+        sigmas=sigmas_node,
+        latent_image=latent,
+    )[1]
+
+
+def generate_h3(
+    w: ComfyWorkflow,
+    checkpoint: CheckpointInput,
+    extent: ScaledExtent,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """MiniMax H3 text-to-image. Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md."""
+    _h3_no_regions(cond)
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+    model = w.h3_sigma_shift(model)
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    latent = w.batch_latent(latent, misc.batch_count)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+    out_image = scale_to_target(extent, w, out_image, models)
+    w.send_image(out_image)
+    return w
+
+
+def refine_h3(
+    w: ComfyWorkflow,
+    image: Image,
+    extent: ScaledExtent,
+    checkpoint: CheckpointInput,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """P-H3 Image edit: the current canvas is passed as reference image 1."""
+    _h3_no_regions(cond)
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+    model = w.h3_sigma_shift(model)
+    in_image = w.load_image(image)
+    in_image = scale_to_initial(extent, w, in_image, models)
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    prompt, latent = _h3_prepare(w, clip.model, vae, positive, extent.initial, in_image, models)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    latent = w.batch_latent(latent, misc.batch_count)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+    out_image = scale_to_target(extent, w, out_image, models)
+    w.send_image(out_image)
+    return w
+
+
+def _h3_no_regions(cond: Conditioning):
+    if len(cond.regions) > 0:
+        raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
+def _h3_edit_extent(extent: Extent, megapixels: float = 4.0, multiple: int = 32) -> Extent:
+    """Render edits at 4 MP, the resolution the model card recommends (max 4x linear upscale).
+
+    Measured on the 3090 with a 640x544 canvas and a 400x360 selection: 2208x1888 in 165 s, with
+    0 px changed outside the selection and no global shift.
+    """
+    target = megapixels * 1024 * 1024
+    if extent.pixel_count >= target * 0.9:
+        return extent
+    factor = min(math.sqrt(target / extent.pixel_count), 4.0)
+    width = int(extent.width * factor) // multiple * multiple
+    height = int(extent.height * factor) // multiple * multiple
+    return Extent(max(multiple, width), max(multiple, height))
+
+
+def _h3_prepare(
+    w: ComfyWorkflow,
+    clip: Output,
+    vae: Output,
+    prompt: str | Output,
+    extent: Extent,
+    image: Output | None,
+    models: ModelDict,
+):
+    """Build the H3 conditioning and its latent.
+
+    With an image, prefer the image-to-image node from H3 Image Studio: it seeds the latent from
+    the source, so the edit keeps the composition instead of re-rendering the crop from scratch.
+    Falls back to the reference-image conditioning of the p-h3 node when the pack is missing.
+    """
+    if image is not None and "H3ImagePrepare" in w.node_defs:
+        return w.h3_image_to_image(clip, vae, prompt, image, extent)
+    return w.h3_conditioning(clip, vae, prompt, extent, image=image)
+
+
+def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
+    """Grow a crop so the model sees surroundings. H3 regenerates the whole crop, so without
+    context the edit has nothing to match and the pasted patch looks pasted."""
+    pad = max(round(bounds.extent.longest_side * 0.25), 32)
+    x0 = max(0, (bounds.x - pad) // multiple * multiple)
+    y0 = max(0, (bounds.y - pad) // multiple * multiple)
+    x1 = min(canvas.width, -(-(bounds.x + bounds.width + pad) // multiple) * multiple)
+    y1 = min(canvas.height, -(-(bounds.y + bounds.height + pad) // multiple) * multiple)
+    return Bounds(x0, y0, x1 - x0, y1 - y0)
+
+
+def _mask_bounds(mask: Image) -> Bounds | None:
+    """Bounding box of the painted area of a mask, in mask pixel coordinates."""
+    data = mask.to_packed_bytes().data()
+    w, h = mask.extent
+    channels = 4 if len(data) == w * h * 4 else 1
+    stride = w * channels
+    step = 2 if w * h > 2_000_000 else 1  # a coarse box is enough, the crop gets padding anyway
+    x0, x1, y0, y1 = w, -1, h, -1
+    for y in range(0, h, step):
+        row = data[y * stride : (y + 1) * stride]
+        if channels == 4:
+            row = row[3::4]
+        if max(row) <= 8:
+            continue
+        y0 = min(y0, y)
+        y1 = y + step
+        x0 = min(x0, next(i for i in range(0, w, step) if row[i] > 8))
+        x1 = max(x1, next(i for i in range(w - 1, -1, -step) if row[i] > 8) + 1)
+    return None if x1 < 0 else Bounds(x0, y0, x1 - x0, y1 - y0)
+
+
+def inpaint_h3(
+    w: ComfyWorkflow,
+    images: ImageInput,
+    checkpoint: CheckpointInput,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    params: InpaintParams,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """P-H3 Image edit limited to a selection.
+
+    The model cannot mask, so the selected region is cropped, regenerated with the crop as
+    reference image, and composited back through the selection mask.
+    """
+    _h3_no_regions(cond)
+    target_bounds = params.target_bounds
+    extent = ScaledExtent.from_input(images.extent)
+
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+    model = w.h3_sigma_shift(model)
+
+    in_image = w.load_image(ensure(images.initial_image))
+    in_image = scale_to_initial(extent, w, in_image, models)
+    in_mask = w.load_mask(ensure(images.hires_mask))
+    inpaint_mask = apply_grow_feather(w, in_mask, params)
+    # H3 always regenerates the whole crop, so compositing the grown/feathered denoise mask pastes
+    # invented pixels well outside the selection. Keep the paste inside the selection instead and
+    # only fade with `blend`, like the mask the user actually drew.
+    cropped_selection = w.crop_mask(in_mask, target_bounds)
+    inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
+    inpaint_mask = w.stabilize_mask(inpaint_mask)
+
+    # The mask image spans the whole canvas, so `target_bounds` is not the selection. Crop to the
+    # painted area instead: regenerating the full canvas lets the model re-compose the character.
+    selection = _mask_bounds(ensure(images.hires_mask)) or Bounds(0, 0, *extent.target)
+    selection = Bounds.intersection(selection, Bounds(0, 0, *extent.target))
+    if selection.area == 0:
+        selection = Bounds(0, 0, *extent.target)
+    initial_selection = extent.convert(selection, "target", "initial")
+    context_bounds = _h3_context_bounds(initial_selection, extent.initial)
+
+    region = w.crop_image(in_image, context_bounds)
+
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    edit_extent = _h3_edit_extent(context_bounds.extent)
+    if edit_extent != context_bounds.extent:
+        region = w.scale_image(region, edit_extent)
+    prompt, latent = _h3_prepare(w, clip.model, vae, positive, edit_extent, region, models)
+    negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    # The model rounds the extent (180 -> 176), so bring it back to the exact crop size.
+    out_image = w.scale_image(out_image, context_bounds.extent)
+    if context_bounds != initial_selection:
+        offset = (initial_selection.x - context_bounds.x, initial_selection.y - context_bounds.y)
+        out_image = w.crop_image(out_image, Bounds(*offset, *initial_selection.extent))
+    if initial_selection.extent != extent.initial:
+        out_image = w.composite_image_masked(
+            out_image, in_image, None, initial_selection.x, initial_selection.y
+        )
+    out_image = w.color_match(out_image, in_image, inpaint_mask, misc.color_match)
+    out_image = w.scale_image(out_image, target_bounds.extent)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+    compositing_mask = denoise_to_compositing_mask(w, cropped_selection, params)
+    w.send_image(w.apply_mask(out_image, compositing_mask))
+    return w
+
+
 def refine_region(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1662,6 +1929,11 @@ def prepare(
     which can be compared and serialized.
     """
     i = WorkflowInput(kind)
+    i.expand_prompt = not is_live and kind in (
+        WorkflowKind.generate,
+        WorkflowKind.refine,
+        WorkflowKind.refine_region,
+    )
     i.conditioning = cond
     i.sampling = sampling_from_style(style, strength, is_live)
     i.sampling.seed = seed
@@ -1792,8 +2064,20 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     workflow = ComfyWorkflow(models.node_inputs, comfy_mode)
     layer_count = i.images.layer_count if i.images else 1
     misc = MiscParams(i.batch_count, layer_count, i.color_match, i.nsfw_filter)
+    # Plain upscaling and control maps carry no checkpoint, so only sampling jobs know the arch.
+    is_h3 = i.models is not None and i.models.version is Arch.h3
 
     if i.kind is WorkflowKind.generate:
+        if is_h3:
+            return generate_h3(
+                workflow,
+                ensure(i.models),
+                ScaledExtent.from_input(i.extent),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return generate(
             workflow,
             ensure(i.models),
@@ -1804,6 +2088,17 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.inpaint:
+        if is_h3:
+            return inpaint_h3(
+                workflow,
+                ensure(i.images),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                ensure(i.inpaint),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return inpaint(
             workflow,
             ensure(i.images),
@@ -1816,6 +2111,17 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine:
+        if is_h3:
+            return refine_h3(
+                workflow,
+                i.image,
+                ScaledExtent.from_input(i.extent),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return refine(
             workflow,
             i.image,
@@ -1827,6 +2133,18 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine_region:
+        if is_h3:
+            # H3 cannot denoise a masked region in place, so treat it like a selection.
+            return inpaint_h3(
+                workflow,
+                ensure(i.images),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                ensure(i.inpaint),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return refine_region(
             workflow,
             ensure(i.images),

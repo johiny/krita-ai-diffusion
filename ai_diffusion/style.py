@@ -357,6 +357,10 @@ class SamplerPreset(NamedTuple):
     hidden: bool = False
 
 
+# Preset used by MiniMax H3: the distilled 8-step schedule (scheduler "manual").
+h3_sampler_preset = "MiniMax H3 - distilled 8 steps"
+
+
 class SamplerPresets:
     default_preset_file = plugin_dir / "presets" / "samplers.json"
     default_user_preset_file = user_data_dir / "presets" / "samplers.json"
