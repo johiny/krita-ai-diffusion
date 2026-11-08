@@ -382,6 +382,7 @@ class ComfyWorkflow:
         steps=20,
         arch=Arch.sdxl,
         extent: Extent | None = None,
+        denoise=1.0,
     ):
         if scheduler == "manual":
             # Sentinel used by the MiniMax H3 preset; other architectures need a real scheduler.
@@ -400,7 +401,7 @@ class ComfyWorkflow:
                 output_count=1,
                 steps=steps,
                 model_type=model_type,
-                denoise=1.0,
+                denoise=denoise,
             )
         elif scheduler == "gits":
             return self.add(
@@ -445,7 +446,7 @@ class ComfyWorkflow:
                 model=model,
                 scheduler=scheduler,
                 steps=steps,
-                denoise=1.0,
+                denoise=denoise,
             )
 
     def split_sigmas(self, sigmas: Output, step=0):
@@ -466,6 +467,12 @@ class ComfyWorkflow:
 
     def manual_sigmas(self, sigmas: str):
         return self.add("ManualSigmas", 1, sigmas=sigmas)
+
+    def image_blend(self, image1: Output, image2: Output, factor: float):
+        """factor 0 -> image1, 1 -> image2."""
+        return self.add(
+            "ImageBlend", 1, image1=image1, image2=image2, blend_factor=factor, blend_mode="normal"
+        )
 
     def h3_conditioning(
         self,

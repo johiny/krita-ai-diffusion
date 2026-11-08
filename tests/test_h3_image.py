@@ -73,6 +73,16 @@ def node_defs() -> ComfyObjectInfo:
                 }
             }
         },
+        "ImageBlend": {
+            "input": {
+                "required": {
+                    "image1": ["IMAGE", {}],
+                    "image2": ["IMAGE", {}],
+                    "blend_factor": ["FLOAT", {"default": 0.5}],
+                    "blend_mode": ["COMBO", {"options": ["normal"]}],
+                }
+            }
+        },
         "BasicScheduler": {
             "input": {
                 "required": {
@@ -120,8 +130,8 @@ def client_models() -> ClientModels:
     return models
 
 
-def sampling(sampler="er_sde", scheduler="manual", steps=8, cfg=1.0) -> SamplingInput:
-    return SamplingInput(sampler, scheduler, cfg, steps, 0, 1234)
+def sampling(sampler="er_sde", scheduler="manual", steps=8, cfg=1.0, start_step=0) -> SamplingInput:
+    return SamplingInput(sampler, scheduler, cfg, steps, start_step, 1234)
 
 
 def misc(batch=1):
@@ -330,6 +340,30 @@ def test_default_cfg_uses_basic_guider():
     assert "CFGGuider" not in types
 
 
+def test_strength_blends_the_regeneration_with_the_original():
+    models = client_models()
+    e = Extent(512, 512)
+
+    def graph(start_step: int):
+        wf_input = workflow.WorkflowInput(
+            workflow.WorkflowKind.refine,
+            ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+            models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+            conditioning=ConditioningInput("add snow", ""),
+            sampling=sampling(start_step=start_step),
+            batch_count=1,
+        )
+        return workflow.create(wf_input, models)
+
+    w = graph(0)
+    assert "ImageBlend" not in class_types(w)
+
+    w = graph(4)  # strength 0.5
+    (blend,) = nodes_of(w, "ImageBlend")
+    assert math.isclose(blend["inputs"]["blend_factor"], 0.5)
+    assert "VAEEncode" not in class_types(w)  # the model needs its own paired latent
+
+
 def test_clip_loader_uses_minimax_type():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
@@ -414,7 +448,13 @@ def test_region_layers_are_rejected():
         ConditioningInput(
             "a cat",
             "",
-            regions=[RegionInput(mask=Image.create(Extent(256, 256)), bounds=Bounds(0, 0, 256, 256), positive="a dog")],
+            regions=[
+                RegionInput(
+                    mask=Image.create(Extent(256, 256)),
+                    bounds=Bounds(0, 0, 256, 256),
+                    positive="a dog",
+                )
+            ],
         ),
         sampling(),
     )
