@@ -94,3 +94,23 @@ free knobs to explore, not as a quality guarantee.
 - First load of a 21 GB checkpoint dominates (~40-90 s).
 - The distilled `p-h3-image_w4a8` (12.4 GB) is the one that comfortably reaches 8 MP on a 3090;
   the finetunes are tight at that resolution.
+
+## Performance (RTX 3090, `--fast` dynamic VRAM loading)
+
+Measured with `h3ErosMax` (20 GB int8), `preserve_strength` 0.6, one edited image, seed fixed.
+Generation time is dominated by streaming the 20 GB transformer from disk, not by pixels:
+
+| Config | 1088x1088 | 1440x1440 | 2048x2048 |
+|---|---|---|---|
+| without the upsampler | 41 s | 47 s | 45 s |
+| with the upsampler | 31 s | 36 s | 50 s |
+| control, fresh seed | 60 s | 55 s | 64 s |
+
+- The upsampler costs 13-17 s warm, 28 s cold, and ~2 s when ComfyUI caches the same prompt and
+  image. It never runs concurrently with the model, so it does not slow sampling down.
+- Every generation re-stages the model after the upsampler job, but only the first job after a
+  cold disk read pays for it: 128 s once, then 45-60 s for identical work.
+- Real Krita jobs at 1312x1312 with the LoRA loaded: 59.8 s and 58.2 s, plus 12.7 s and 13.6 s of
+  upsampler - about 72 s per edit.
+- Peak VRAM: 21-23 GB. 4 MP + the upsampler in one graph does not fit: both sets of weights end up
+  streaming and an edit takes over 20 minutes, which is why the upsampler is a separate job.
