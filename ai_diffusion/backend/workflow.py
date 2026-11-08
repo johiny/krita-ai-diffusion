@@ -1365,10 +1365,13 @@ def _h3_edit_guide() -> str:
     # refer to it, so the prompt does not have to mention the canvas at all.
     # No "outfit" in the preserved list: clothing is the most common thing to change, and listing it
     # made the model keep the canvas outfit even when the instruction asked for the reference one.
+    # Nothing is listed as "preserved": naming pose/background/outfit here contradicted every
+    # instruction that changes them and the model obeyed the list instead of the prompt.
     return (
         "Edit <Picture 1>, the picture currently on the canvas. The instruction refers to <Picture 1> "
-        "unless it names another picture. Take only the traits it assigns to another picture and keep "
-        "everything else in <Picture 1> unchanged: identity, pose, framing and background."
+        "unless it names another picture. Apply exactly the changes it asks for and leave the rest of "
+        "<Picture 1> unchanged; take nothing from another picture except what the instruction assigns "
+        "to it."
     )
 
 

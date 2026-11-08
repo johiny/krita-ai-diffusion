@@ -673,7 +673,7 @@ def test_edit_reference_prompt_keeps_picture_1_in_charge():
     prompt = prepare["inputs"]["prompt"]
     assert prompt.startswith("Edit <Picture 1>, the picture currently on the canvas.")
     assert "The instruction refers to <Picture 1> unless it names another picture." in prompt
-    assert "keep everything else in <Picture 1> unchanged" in prompt
+    assert "Apply exactly the changes it asks for and leave the rest of <Picture 1> unchanged" in prompt
     assert prompt.endswith("make the dress red")
 
 
