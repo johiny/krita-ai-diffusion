@@ -1584,16 +1584,22 @@ def create_control_image(
 
 def _upscale_with_model(w: ComfyWorkflow, image: Output, upscale: UpscaleInput, factor: float):
     if upscale.model == resources.rtx_vsr_node:
-        return w.rtx_upscale_image(image, min(4.0, factor), upscale.rtx_quality)
+        return w.rtx_upscale_image(image, factor, upscale.rtx_quality, upscale.rtx_strength)
     upscale_model = w.load_upscale_model(upscale.model)
     return w.upscale_image(upscale_model, image)
+
+
+def _rtx_keeps_size(quality: str):
+    # DENOISE and DEBLUR modes process at the original resolution
+    return quality.startswith(("DENOISE_", "DEBLUR_"))
 
 
 def upscale_simple(w: ComfyWorkflow, image: Image, upscale: UpscaleInput, factor: float):
     img = _upscale_with_model(w, w.load_image(image), upscale, factor)
     target = image.extent * factor
     if upscale.model == resources.rtx_vsr_node:
-        if factor > 4.0 or not target.is_multiple_of(8):
+        # VSR caps the scale factor at 4 and rounds the output to multiples of 8
+        if factor > 4.0 or _rtx_keeps_size(upscale.rtx_quality) or not target.is_multiple_of(8):
             img = w.scale_image(img, target)
     elif not math.isclose(factor, 4.0):
         img = w.scale_image(img, target)
@@ -2029,13 +2035,13 @@ def prepare(
     return i
 
 
-def prepare_upscale_simple(image: Image, model: str, factor: float, rtx_quality="ULTRA"):
+def prepare_upscale_simple(
+    image: Image, model: str, factor: float, rtx_quality: str = "ULTRA", rtx_strength: float = 1.0
+):
     target_extent = image.extent * factor
     extent = ExtentInput(image.extent, image.extent, target_extent, target_extent)
     i = WorkflowInput(WorkflowKind.upscale_simple, ImageInput(extent, image))
-    i.upscale = UpscaleInput(
-        model, rtx_quality=rtx_quality if model == resources.rtx_vsr_node else "ULTRA"
-    )
+    i.upscale = UpscaleInput(model, rtx_quality=rtx_quality, rtx_strength=rtx_strength)
     return i
 
 

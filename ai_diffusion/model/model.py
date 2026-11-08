@@ -43,7 +43,7 @@ from ..backend.client import (
 )
 from ..backend.network import NetworkError
 from ..backend.resolution import compute_bounds, compute_relative_bounds
-from ..backend.resources import ControlMode, rtx_vsr_node
+from ..backend.resources import ControlMode
 from ..document import Document, KritaDocument, SelectionModifiers
 from ..files import FileLibrary
 from ..image import BlendMode, Bounds, DummyImage, Extent, Image, Mask
@@ -417,7 +417,11 @@ class DocumentModel(QObject, ObservableProperties):
             )
         else:
             input = workflow.prepare_upscale_simple(
-                image, params.upscale.model, params.factor, params.upscale.rtx_quality
+                image,
+                params.upscale.model,
+                params.factor,
+                params.upscale.rtx_quality,
+                params.upscale.rtx_strength,
             )
 
         target_bounds = Bounds(0, 0, *params.target_extent)
@@ -1123,7 +1127,9 @@ class TileOverlapMode(Enum):
 
 class UpscaleWorkspace(QObject, ObservableProperties):
     upscaler = Property("", persist=True)
+    # Only used by the RTX VSR upscaler, which is not a regular upscale model
     rtx_quality = Property("ULTRA", persist=True)
+    rtx_strength = Property(1.0, persist=True)
     factor = Property(2.0, persist=True, setter="_set_factor")
     use_diffusion = Property(True, persist=True)
     strength = Property(0.3, persist=True)
@@ -1135,6 +1141,7 @@ class UpscaleWorkspace(QObject, ObservableProperties):
 
     upscaler_changed = pyqtSignal(str)
     rtx_quality_changed = pyqtSignal(str)
+    rtx_strength_changed = pyqtSignal(float)
     factor_changed = pyqtSignal(float)
     use_diffusion_changed = pyqtSignal(bool)
     strength_changed = pyqtSignal(float)
@@ -1159,6 +1166,9 @@ class UpscaleWorkspace(QObject, ObservableProperties):
         if client := model._connection.client_if_connected:
             if self.upscaler not in client.models.upscalers:
                 self.upscaler = client.models.default_upscaler
+            if rtx := client.models.rtx_vsr:
+                if self.rtx_quality not in rtx["quality"]:
+                    self.rtx_quality = rtx["default_quality"]
 
     def set_in_progress(self, in_progress: bool):
         self._in_progress = in_progress
@@ -1183,11 +1193,7 @@ class UpscaleWorkspace(QObject, ObservableProperties):
         model = ensure(self._model())
         overlap = self.tile_overlap if self.tile_overlap_mode is TileOverlapMode.custom else -1
         return UpscaleParams(
-            upscale=UpscaleInput(
-                self.upscaler,
-                overlap,
-                self.rtx_quality if self.upscaler == rtx_vsr_node else "ULTRA",
-            ),
+            upscale=UpscaleInput(self.upscaler, overlap, self.rtx_quality, self.rtx_strength),
             factor=self.factor,
             use_diffusion=self.use_diffusion,
             unblur_strength=self.unblur_strength,
