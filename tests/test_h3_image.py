@@ -6,6 +6,7 @@ both the conditioning and the latent, a fixed 8-step schedule and no CFG.
 
 import asyncio
 import dataclasses
+import itertools
 import json
 import math
 from pathlib import Path
@@ -780,6 +781,31 @@ def test_edit_prompt_does_not_have_to_name_the_canvas():
     body = prompt.split("\n\n", 1)[1]
     assert "<Picture 1>" not in body  # el usuario no lo escribió
     assert prompt.count("<Picture 1>") >= 2  # el guía lo dice dos veces
+
+
+def test_manual_agenda_honours_the_step_count():
+    """El scheduler destilado es una curva fija: con 8 pasos se devuelve tal cual, con más se interpola."""
+    assert workflow.h3_agenda(8) == workflow.h3_sigmas
+    values = [float(v) for v in workflow.h3_agenda(16).split(",")]
+    assert len(values) == 17
+    assert math.isclose(values[0], 1.0) and math.isclose(values[-1], 0.0)
+    assert all(a > b for a, b in itertools.pairwise(values))
+
+
+def test_manual_scheduler_sends_the_requested_steps():
+    models = with_h3_image_studio(client_models())
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.generate,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("x", ""),
+        sampling=SamplingInput("euler", "manual", 1.0, 16, 0, 7),
+        batch_count=1,
+    )
+    w = workflow.create(wf_input, models)
+    (node,) = nodes_of(w, "ManualSigmas")
+    assert len(node["inputs"]["sigmas"].split(",")) == 17
 
 
 def test_prompt_upsampler_runs_as_its_own_job(monkeypatch):

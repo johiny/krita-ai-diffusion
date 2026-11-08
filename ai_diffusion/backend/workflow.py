@@ -61,6 +61,28 @@ def detect_inpaint_mode(extent: Extent, area: Bounds):
 h3_sigmas = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
 
 
+def h3_agenda(steps: int) -> str:
+    """The distilled agenda resampled to `steps` steps.
+
+    `h3_sigmas` is a fixed eight-step curve, so passing it verbatim ignored the step count and every
+    job ran eight steps no matter what the UI said. Interpolating keeps the curve and honours the
+    setting; the exact eight-step values are returned untouched.
+    """
+    values = [float(v) for v in h3_sigmas.split(",")]
+    if steps == len(values) - 1:
+        return h3_sigmas
+    count = max(2, steps)
+    result = []
+    for index in range(count + 1):
+        position = index * (len(values) - 1) / count
+        low = int(position)
+        high = min(low + 1, len(values) - 1)
+        fraction = position - low
+        result.append(values[low] + (values[high] - values[low]) * fraction)
+    result[-1] = 0.0
+    return ", ".join(f"{value:.6f}".rstrip("0").rstrip(".") for value in result)
+
+
 def generate_seed():
     # Currently only using 32 bit because Qt widgets don't support int64
     return random.randint(0, 2**32 - 1)
@@ -1235,7 +1257,7 @@ def _h3_sample(
     else:
         guider = w.basic_guider(model, prompt)
     if sampling.scheduler.lower() in h3_manual_schedulers:
-        sigmas_node = w.manual_sigmas(h3_sigmas)
+        sigmas_node = w.manual_sigmas(h3_agenda(sampling.total_steps))
     else:
         sigmas_node = w.scheduler_sigmas(
             model,
