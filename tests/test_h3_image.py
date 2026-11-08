@@ -25,6 +25,7 @@ from ai_diffusion.backend.resolution import ScaledExtent
 from ai_diffusion.files import FileFormat
 from ai_diffusion.image import Bounds, Extent, Image
 from ai_diffusion.style import h3_sampler_preset
+from ai_diffusion.util import PluginError
 
 CHECKPOINT = "p-h3-image_w4a8.safetensors"
 TEXT_ENCODER = "p-h3-image_text_encoder_w4a8.safetensors"
@@ -406,16 +407,41 @@ def test_selection_crops_and_composites():
 
 
 def test_region_layers_are_rejected():
+    from ai_diffusion.backend.api import RegionInput
+    from ai_diffusion.image import Bounds
+
+    cond = workflow.Conditioning.from_input(
+        ConditioningInput(
+            "a cat",
+            "",
+            regions=[RegionInput(mask=Image.create(Extent(256, 256)), bounds=Bounds(0, 0, 256, 256), positive="a dog")],
+        ),
+        sampling(),
+    )
+    with pytest.raises(PluginError, match="region"):
+        workflow._h3_no_regions(cond)
+
+
+def test_refine_with_a_selection_is_treated_as_a_crop_edit():
     models = client_models()
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    e = Extent(512, 512)
     wf_input = workflow.WorkflowInput(
         workflow.WorkflowKind.refine_region,
-        ImageInput(
-            ExtentInput(Extent(512, 512), Extent(512, 512), Extent(512, 512), Extent(512, 512))
-        ),
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
         models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("make it snow", ""),
+        sampling=sampling(),
+        inpaint=InpaintParams(InpaintMode.fill, Bounds(128, 128, 256, 256)),
+        batch_count=1,
     )
-    with pytest.raises(Exception, match="region"):
-        workflow.create(wf_input, models)
+    assert wf_input.images is not None
+    wf_input.images.hires_mask = Image.create(e)
+    w = workflow.create(wf_input, models)
+    types = class_types(w)
+    assert "ImageCrop" in types
+    assert "PH3ImageConditioning" in types
+    assert "ETN_ApplyMaskToImage" in types
 
 
 def test_builtin_style_matches_the_h3_family():

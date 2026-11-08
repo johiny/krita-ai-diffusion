@@ -1254,6 +1254,7 @@ def generate_h3(
     models: ModelDict,
 ):
     """MiniMax H3 text-to-image. Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md."""
+    _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
@@ -1279,6 +1280,7 @@ def refine_h3(
     models: ModelDict,
 ):
     """P-H3 Image edit: the current canvas is passed as reference image 1."""
+    _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     in_image = w.load_image(image)
@@ -1295,6 +1297,11 @@ def refine_h3(
     return w
 
 
+def _h3_no_regions(cond: Conditioning):
+    if len(cond.regions) > 0:
+        raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
 def inpaint_h3(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1302,7 +1309,6 @@ def inpaint_h3(
     cond: Conditioning,
     sampling: SamplingInput,
     params: InpaintParams,
-    crop_upscale_extent: Extent,
     misc: MiscParams,
     models: ModelDict,
 ):
@@ -1311,6 +1317,7 @@ def inpaint_h3(
     The model cannot mask, so the selected region is cropped, regenerated with the crop as
     reference image, and composited back through the selection mask.
     """
+    _h3_no_regions(cond)
     target_bounds = params.target_bounds
     extent = ScaledExtent.from_input(images.extent)
 
@@ -1949,14 +1956,6 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     arch = ensure(i.models).version
     is_h3 = arch is Arch.h3
 
-    if is_h3 and i.kind is WorkflowKind.refine_region:
-        raise PluginError(
-            _(
-                "MiniMax H3 does not support region layers."
-                " Use a selection or edit mode without regions instead."
-            )
-        )
-
     if i.kind is WorkflowKind.generate:
         if is_h3:
             return generate_h3(
@@ -1986,7 +1985,6 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
                 Conditioning.from_input(ensure(i.conditioning), i.sampling),
                 ensure(i.sampling),
                 ensure(i.inpaint),
-                ensure(i.crop_upscale_extent),
                 misc,
                 models.for_arch(arch),
             )
@@ -2024,6 +2022,18 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine_region:
+        if is_h3:
+            # H3 cannot denoise a masked region in place, so treat it like a selection.
+            return inpaint_h3(
+                workflow,
+                ensure(i.images),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                ensure(i.inpaint),
+                misc,
+                models.for_arch(arch),
+            )
         return refine_region(
             workflow,
             ensure(i.images),

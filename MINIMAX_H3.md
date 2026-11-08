@@ -19,7 +19,9 @@ not know the `MiniMaxH3` class unless patched), so the architecture is resolved 
 | Negative prompt | unused at CFG 1.0 |
 
 Everything else keeps the model in familiar territory: no LoRA required, no ControlNet, no
-regional prompts, no masked inpaint (a selection is emulated by cropping and compositing back).
+regional prompts and no masked inpaint. A selection (Generate and Refine alike, live preview
+included) is emulated: the selection is cropped, sent as reference image 1, and composited back
+through the mask. Region layers are still unsupported and raise a clear error.
 
 Picking the preset **"MiniMax H3 - distilled 8 steps"** applies the whole table at once. New H3
 styles select it automatically while they still hold the plugin default.
