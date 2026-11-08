@@ -84,6 +84,13 @@ row: in a 512x512 A/B test, `dpmpp_2m + karras + 12 steps` returned an abstract 
 instead of the prompted scene, while `dpmpp_2m` with the manual schedule stayed coherent. Use the
 free knobs to explore, not as a quality guarantee.
 
+## Writing prompts
+
+There is no prompt upsampler any more: the request reaches the model as typed. The prompt is
+therefore part of the recipe — action first, every trait assigned to a named picture, pose as
+geometry, the medium stated when a photographic reference is connected. Rules, templates,
+anti-patterns and the post-job checklist: [MINIMAX_H3_PROMPTING.md](MINIMAX_H3_PROMPTING.md).
+
 ## References (multiple images)
 
 H3 has no IP-Adapter: reference layers travel inside the conditioning. Put the pictures on control
