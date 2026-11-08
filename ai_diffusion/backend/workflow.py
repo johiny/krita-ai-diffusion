@@ -1291,7 +1291,7 @@ def refine_h3(
     in_image = w.load_image(image)
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial, image=in_image)
+    prompt, latent = _h3_prepare(w, clip.model, vae, positive, extent.initial, in_image, models)
     negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
@@ -1305,6 +1305,26 @@ def refine_h3(
 def _h3_no_regions(cond: Conditioning):
     if len(cond.regions) > 0:
         raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
+def _h3_prepare(
+    w: ComfyWorkflow,
+    clip: Output,
+    vae: Output,
+    prompt: str | Output,
+    extent: Extent,
+    image: Output | None,
+    models: ModelDict,
+):
+    """Build the H3 conditioning and its latent.
+
+    With an image, prefer the image-to-image node from H3 Image Studio: it seeds the latent from
+    the source, so the edit keeps the composition instead of re-rendering the crop from scratch.
+    Falls back to the reference-image conditioning of the p-h3 node when the pack is missing.
+    """
+    if image is not None and "H3ImagePrepare" in w.node_defs:
+        return w.h3_image_to_image(clip, vae, prompt, image, extent)
+    return w.h3_conditioning(clip, vae, prompt, extent, image=image)
 
 
 def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
@@ -1384,8 +1404,8 @@ def inpaint_h3(
     region = w.crop_image(in_image, context_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.h3_conditioning(
-        clip.model, vae, positive, context_bounds.extent, image=region
+    prompt, latent = _h3_prepare(
+        w, clip.model, vae, positive, context_bounds.extent, region, models
     )
     negative = _h3_negative(w, cond, clip, vae, context_bounds.extent, sampling)
     out_latent = _h3_sample(

@@ -143,6 +143,32 @@ def client_models() -> ClientModels:
     return models
 
 
+def with_h3_image_studio(models: ClientModels) -> ClientModels:
+    """Same client, but the server also has the H3 Image Studio image-to-image node."""
+    defs = node_defs()
+    defs.nodes["H3ImagePrepare"] = {
+        "input": {
+            "required": {
+                "clip": ["CLIP", {}],
+                "vae": ["VAE", {}],
+                "source_image": ["IMAGE", {}],
+                "prompt": ["STRING", {"default": ""}],
+                "width": ["INT", {"default": 1024}],
+                "height": ["INT", {"default": 1024}],
+                "mode": ["COMBO", {"options": ["image_to_image (FL2VA)"]}],
+                "frame_preset": ["COMBO", {"options": ["single image | 1 frame (image VAE)"]}],
+                "optimize_prompt": ["BOOLEAN", {"default": True}],
+                "preserve_strength": ["FLOAT", {"default": 0.6}],
+                "source_fit": ["COMBO", {"options": ["crop_center"]}],
+                "reference_size": ["COMBO", {"options": ["match_generation_area"]}],
+            }
+        },
+        "output": ["CONDITIONING", "LATENT"],
+    }
+    models.node_inputs = defs
+    return models
+
+
 def sampling(sampler="er_sde", scheduler="manual", steps=8, cfg=1.0, start_step=0) -> SamplingInput:
     return SamplingInput(sampler, scheduler, cfg, steps, start_step, 1234)
 
@@ -546,3 +572,25 @@ def test_prompt_json_is_serializable():
         models.for_arch(resources.Arch.h3),
     )
     json.dumps(w.root)  # must not raise
+
+
+def test_edit_seeds_the_latent_from_the_image_when_available():
+    models = with_h3_image_studio(client_models())
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.refine,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        conditioning=ConditioningInput("add snow", ""),
+        sampling=sampling(),
+        batch_count=1,
+    )
+    w = workflow.create(wf_input, models)
+
+    (prepare,) = nodes_of(w, "H3ImagePrepare")
+    assert prepare["inputs"]["mode"] == "image_to_image (FL2VA)"
+    assert prepare["inputs"]["frame_preset"] == "single image | 1 frame (image VAE)"
+    assert math.isclose(prepare["inputs"]["preserve_strength"], 0.6)
+    assert "PH3ImageConditioning" not in class_types(w)
+    # El latent viene del nodo, no de un VAEEncode: no se puede codificar aparte.
+    assert "VAEEncode" not in class_types(w)

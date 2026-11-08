@@ -491,6 +491,37 @@ class ComfyWorkflow:
             args["images.image_1"] = image
         return self.add("PH3ImageConditioning", 2, **args)
 
+    def h3_image_to_image(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        image: Output,
+        extent: Extent,
+        preserve: float = 0.6,
+    ):
+        """MiniMax H3 image-to-image conditioning (H3 Image Studio).
+
+        Starts the latent from the source image instead of an empty one, so the model keeps the
+        composition and only applies the instruction. Returns (conditioning, latent).
+        """
+        return self.add(
+            "H3ImagePrepare",
+            2,
+            clip=clip,
+            vae=vae,
+            prompt=prompt,
+            source_image=image,
+            width=extent.width,
+            height=extent.height,
+            mode="image_to_image (FL2VA)",
+            frame_preset="single image | 1 frame (image VAE)",
+            optimize_prompt=True,
+            preserve_strength=preserve,
+            source_fit="crop_center",
+            reference_size="match_generation_area",
+        )
+
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
             "CFGGuider",

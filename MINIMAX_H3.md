@@ -35,6 +35,13 @@ included) is emulated in three steps:
 Inside the selection everything is regenerated - the node has no mask input - so keep selections
 small and prompts focused on the change when the original has to survive.
 
+When the **H3 Image Studio** pack is installed, edits go through `H3ImagePrepare` in
+`image_to_image (FL2VA)` mode instead: the latent starts from the source image with
+`preserve_strength` 0.6, so the model keeps the composition instead of re-rendering the crop from
+scratch. Measured on a 640x544 canvas with a 400x360 selection: no global shift (dx=0, dy=0) and
+0 px changed outside the selection. Without the pack the workflow falls back to
+`PH3ImageConditioning`, which only sees the crop as a reference image.
+
 Region layers are still unsupported and raise a clear error.
 
 Picking the preset **"MiniMax H3 - distilled 8 steps"** applies the whole table at once. New H3
