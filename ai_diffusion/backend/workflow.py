@@ -1307,6 +1307,17 @@ def _h3_no_regions(cond: Conditioning):
         raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
 
 
+def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
+    """Grow a crop so the model sees surroundings. H3 regenerates the whole crop, so without
+    context the edit has nothing to match and the pasted patch looks pasted."""
+    pad = max(round(bounds.extent.longest_side * 0.25), 32)
+    x0 = max(0, (bounds.x - pad) // multiple * multiple)
+    y0 = max(0, (bounds.y - pad) // multiple * multiple)
+    x1 = min(canvas.width, -(-(bounds.x + bounds.width + pad) // multiple) * multiple)
+    y1 = min(canvas.height, -(-(bounds.y + bounds.height + pad) // multiple) * multiple)
+    return Bounds(x0, y0, x1 - x0, y1 - y0)
+
+
 def inpaint_h3(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1333,28 +1344,37 @@ def inpaint_h3(
     in_image = scale_to_initial(extent, w, in_image, models)
     in_mask = w.load_mask(ensure(images.hires_mask))
     inpaint_mask = apply_grow_feather(w, in_mask, params)
-    cropped_mask = w.crop_mask(inpaint_mask, target_bounds)  # target resolution, for compositing
+    # H3 always regenerates the whole crop, so compositing the grown/feathered denoise mask pastes
+    # invented pixels well outside the selection. Keep the paste inside the selection instead and
+    # only fade with `blend`, like the mask the user actually drew.
+    cropped_selection = w.crop_mask(in_mask, target_bounds)
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
     initial_bounds = extent.convert(target_bounds, "target", "initial")
-    region = w.crop_image(in_image, initial_bounds)
-    region_mask = w.crop_mask(inpaint_mask, initial_bounds)
+    context_bounds = _h3_context_bounds(initial_bounds, extent.initial)
+    region = w.crop_image(in_image, context_bounds)
+    region_mask = w.crop_mask(inpaint_mask, context_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
     prompt, latent = w.h3_conditioning(
-        clip.model, vae, positive, initial_bounds.extent, image=region
+        clip.model, vae, positive, context_bounds.extent, image=region
     )
-    negative = _h3_negative(w, cond, clip, vae, initial_bounds.extent, sampling)
+    negative = _h3_negative(w, cond, clip, vae, context_bounds.extent, sampling)
     out_latent = _h3_sample(
-        w, model, prompt, negative, latent, sampling, initial_bounds.extent, models
+        w, model, prompt, negative, latent, sampling, context_bounds.extent, models
     )
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    out_image = w.scale_image(out_image, context_bounds.extent)  # model rounds the extent
+    if context_bounds != initial_bounds:
+        offset = (initial_bounds.x - context_bounds.x, initial_bounds.y - context_bounds.y)
+        out_image = w.crop_image(out_image, Bounds(*offset, *initial_bounds.extent))
     out_image = w.color_match(out_image, region, region_mask, misc.color_match)
-    if initial_bounds.extent != target_bounds.extent:
-        out_image = w.scale_image(out_image, target_bounds.extent)
+    # The model rounds the crop extent (180 -> 176), so always bring it back to the exact mask
+    # size before compositing. Otherwise the paste is offset/short and bleeds past the selection.
+    out_image = w.scale_image(out_image, target_bounds.extent)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
-    compositing_mask = denoise_to_compositing_mask(w, cropped_mask, params)
+    compositing_mask = denoise_to_compositing_mask(w, cropped_selection, params)
     w.send_image(w.apply_mask(out_image, compositing_mask))
     return w
 

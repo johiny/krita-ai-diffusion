@@ -20,8 +20,16 @@ not know the `MiniMaxH3` class unless patched), so the architecture is resolved 
 
 Everything else keeps the model in familiar territory: no LoRA required, no ControlNet, no
 regional prompts and no masked inpaint. A selection (Generate and Refine alike, live preview
-included) is emulated: the selection is cropped, sent as reference image 1, and composited back
-through the mask. Region layers are still unsupported and raise a clear error.
+included) is emulated in three steps:
+
+1. The selection bounds are padded with the UI padding and then with 25% extra context (minimum
+   32 px), because the model regenerates the whole crop and needs to see what surrounds the edit.
+2. The crop is sent as reference image 1 and regenerated.
+3. Only the pixels inside the selection are composited back, faded by the Selection Blend value.
+   Selection Feather and Grow describe a denoise mask and are not used: pasting invented pixels
+   into that halo is what made results appear to leak outside the selection.
+
+Region layers are still unsupported and raise a clear error.
 
 Picking the preset **"MiniMax H3 - distilled 8 steps"** applies the whole table at once. New H3
 styles select it automatically while they still hold the plugin default.

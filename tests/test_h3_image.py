@@ -435,8 +435,23 @@ def test_selection_crops_and_composites():
 
     (ph3,) = nodes_of(w, "PH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
-    assert ph3["inputs"]["width"] == 256
-    assert ph3["inputs"]["height"] == 256
+    # 256 selection + 64 px of context on each side: the model needs to see the surroundings
+    assert ph3["inputs"]["width"] == 384
+    assert ph3["inputs"]["height"] == 384
+    assert class_types(w).count("ImageCrop") == 2  # context crop in, selection crop back out
+
+    # Compositing uses the mask the user drew, not the grown/feathered denoise mask, otherwise the
+    # invented pixels land outside the selection.
+    (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
+    mask_node_id = apply["inputs"]["mask"][0]
+    chain = [w.root[mask_node_id]["class_type"]]
+    while node_inputs := [
+        v for v in w.root[mask_node_id]["inputs"].values() if isinstance(v, list)
+    ]:
+        mask_node_id = node_inputs[0][0]
+        chain.append(w.root[mask_node_id]["class_type"])
+    assert "INPAINT_ExpandMask" not in chain
+    assert chain[0] == "ThresholdMask" and chain[1] == "CropMask"
 
 
 def test_region_layers_are_rejected():
