@@ -24,6 +24,7 @@ from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo, ComfyWorkflow
 from ai_diffusion.backend.resolution import ScaledExtent
 from ai_diffusion.files import FileFormat
 from ai_diffusion.image import Bounds, Extent, Image
+from ai_diffusion.style import h3_sampler_preset
 
 CHECKPOINT = "p-h3-image_w4a8.safetensors"
 TEXT_ENCODER = "p-h3-image_text_encoder_w4a8.safetensors"
@@ -415,6 +416,23 @@ def test_region_layers_are_rejected():
     )
     with pytest.raises(Exception, match="region"):
         workflow.create(wf_input, models)
+
+
+def test_builtin_style_matches_the_h3_family():
+    from ai_diffusion.backend.client import resolve_arch
+    from ai_diffusion.style import Style, Styles
+
+    path = Styles.default_builtin_folder / "minimax-h3.json"
+    assert path.exists()
+    style = Style.load(path)
+    assert style is not None
+    assert style.sampler == h3_sampler_preset
+    assert style.sampler_steps == 8
+    assert math.isclose(style.cfg_scale, 1.0)
+
+    models = client_models()
+    assert style.preferred_checkpoint(models.checkpoints.keys()) == CHECKPOINT
+    assert resolve_arch(style, models) is resources.Arch.h3
 
 
 def test_prompt_json_is_serializable():
