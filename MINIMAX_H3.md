@@ -22,12 +22,18 @@ Everything else keeps the model in familiar territory: no LoRA required, no Cont
 regional prompts and no masked inpaint. A selection (Generate and Refine alike, live preview
 included) is emulated in three steps:
 
-1. The selection bounds are padded with the UI padding and then with 25% extra context (minimum
-   32 px), because the model regenerates the whole crop and needs to see what surrounds the edit.
+1. The painted area of the selection mask is measured and cropped with 25% extra context
+   (minimum 32 px, aligned to 32), because the model regenerates the whole crop and needs to see
+   what surrounds the edit. The mask image itself spans the whole canvas, so the selection is
+   measured from its pixels, not from its bounds.
 2. The crop is sent as reference image 1 and regenerated.
-3. Only the pixels inside the selection are composited back, faded by the Selection Blend value.
-   Selection Feather and Grow describe a denoise mask and are not used: pasting invented pixels
-   into that halo is what made results appear to leak outside the selection.
+3. The patch is pasted back into the untouched image at the selection offset, then only the pixels
+   inside the selection are composited, faded by the Selection Blend value. Selection Feather and
+   Grow describe a denoise mask and are not used: pasting invented pixels into that halo is what
+   made results appear to leak outside the selection.
+
+Inside the selection everything is regenerated - the node has no mask input - so keep selections
+small and prompts focused on the change when the original has to survive.
 
 Region layers are still unsupported and raise a clear error.
 

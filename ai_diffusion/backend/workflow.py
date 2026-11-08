@@ -1318,6 +1318,27 @@ def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bo
     return Bounds(x0, y0, x1 - x0, y1 - y0)
 
 
+def _mask_bounds(mask: Image) -> Bounds | None:
+    """Bounding box of the painted area of a mask, in mask pixel coordinates."""
+    data = mask.to_packed_bytes().data()
+    w, h = mask.extent
+    channels = 4 if len(data) == w * h * 4 else 1
+    stride = w * channels
+    step = 2 if w * h > 2_000_000 else 1  # a coarse box is enough, the crop gets padding anyway
+    x0, x1, y0, y1 = w, -1, h, -1
+    for y in range(0, h, step):
+        row = data[y * stride : (y + 1) * stride]
+        if channels == 4:
+            row = row[3::4]
+        if max(row) <= 8:
+            continue
+        y0 = min(y0, y)
+        y1 = y + step
+        x0 = min(x0, next(i for i in range(0, w, step) if row[i] > 8))
+        x1 = max(x1, next(i for i in range(w - 1, -1, -step) if row[i] > 8) + 1)
+    return None if x1 < 0 else Bounds(x0, y0, x1 - x0, y1 - y0)
+
+
 def inpaint_h3(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1351,10 +1372,16 @@ def inpaint_h3(
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
-    initial_bounds = extent.convert(target_bounds, "target", "initial")
-    context_bounds = _h3_context_bounds(initial_bounds, extent.initial)
+    # The mask image spans the whole canvas, so `target_bounds` is not the selection. Crop to the
+    # painted area instead: regenerating the full canvas lets the model re-compose the character.
+    selection = _mask_bounds(ensure(images.hires_mask)) or Bounds(0, 0, *extent.target)
+    selection = Bounds.intersection(selection, Bounds(0, 0, *extent.target))
+    if selection.area == 0:
+        selection = Bounds(0, 0, *extent.target)
+    initial_selection = extent.convert(selection, "target", "initial")
+    context_bounds = _h3_context_bounds(initial_selection, extent.initial)
+
     region = w.crop_image(in_image, context_bounds)
-    region_mask = w.crop_mask(inpaint_mask, context_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
     prompt, latent = w.h3_conditioning(
@@ -1365,13 +1392,16 @@ def inpaint_h3(
         w, model, prompt, negative, latent, sampling, context_bounds.extent, models
     )
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
-    out_image = w.scale_image(out_image, context_bounds.extent)  # model rounds the extent
-    if context_bounds != initial_bounds:
-        offset = (initial_bounds.x - context_bounds.x, initial_bounds.y - context_bounds.y)
-        out_image = w.crop_image(out_image, Bounds(*offset, *initial_bounds.extent))
-    out_image = w.color_match(out_image, region, region_mask, misc.color_match)
-    # The model rounds the crop extent (180 -> 176), so always bring it back to the exact mask
-    # size before compositing. Otherwise the paste is offset/short and bleeds past the selection.
+    # The model rounds the extent (180 -> 176), so bring it back to the exact crop size.
+    out_image = w.scale_image(out_image, context_bounds.extent)
+    if context_bounds != initial_selection:
+        offset = (initial_selection.x - context_bounds.x, initial_selection.y - context_bounds.y)
+        out_image = w.crop_image(out_image, Bounds(*offset, *initial_selection.extent))
+    if initial_selection.extent != extent.initial:
+        out_image = w.composite_image_masked(
+            out_image, in_image, None, initial_selection.x, initial_selection.y
+        )
+    out_image = w.color_match(out_image, in_image, inpaint_mask, misc.color_match)
     out_image = w.scale_image(out_image, target_bounds.extent)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     compositing_mask = denoise_to_compositing_mask(w, cropped_selection, params)

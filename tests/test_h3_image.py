@@ -32,6 +32,19 @@ TEXT_ENCODER = "p-h3-image_text_encoder_w4a8.safetensors"
 VAE = "p-h3-image_vae_int8_convrot.safetensors"
 
 
+def mask_with_rect(extent: Extent, rect: Bounds) -> Image:
+    """Grayscale mask with a white rectangle, like the selection the UI sends."""
+    from PyQt6.QtCore import QRect, Qt
+    from PyQt6.QtGui import QImage, QPainter
+
+    qimage = QImage(extent.width, extent.height, QImage.Format.Format_Grayscale8)
+    qimage.fill(Qt.GlobalColor.black)
+    painter = QPainter(qimage)
+    painter.fillRect(QRect(rect.x, rect.y, rect.width, rect.height), Qt.GlobalColor.white)
+    painter.end()
+    return Image(qimage)
+
+
 def node_defs() -> ComfyObjectInfo:
     nodes = {
         "UNETLoader": {"input": {"required": {"unet_name": ["COMBO", {}]}}},
@@ -418,13 +431,15 @@ def test_selection_crops_and_composites():
     e = Extent(512, 512)
     wf_input = workflow.WorkflowInput(
         workflow.WorkflowKind.inpaint,
-        ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e), Image.create(e)),
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e)),
         models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
         sampling=sampling(),
         conditioning=ConditioningInput("make it snowy", ""),
         inpaint=InpaintParams(InpaintMode.custom, Bounds(128, 128, 256, 256), grow=8, feather=8),
         crop_upscale_extent=e,
     )
+    assert wf_input.images is not None
+    wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
     w = workflow.create(wf_input, models)
 
     types = class_types(w)
@@ -439,6 +454,9 @@ def test_selection_crops_and_composites():
     assert ph3["inputs"]["width"] == 384
     assert ph3["inputs"]["height"] == 384
     assert class_types(w).count("ImageCrop") == 2  # context crop in, selection crop back out
+    # The patch goes back into the untouched image at the selection offset, so nothing else moves.
+    (composite,) = nodes_of(w, "ImageCompositeMasked")
+    assert composite["inputs"]["x"] == 128 and composite["inputs"]["y"] == 128
 
     # Compositing uses the mask the user drew, not the grown/feathered denoise mask, otherwise the
     # invented pixels land outside the selection.
