@@ -58,7 +58,7 @@ def detect_inpaint_mode(extent: Extent, area: Bounds):
 
 
 # P-H3 Image is distilled for exactly this 8-step schedule (8 sampling steps, 9 sigmas).
-p_h3_sigmas = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
+h3_sigmas = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
 
 
 def generate_seed():
@@ -169,7 +169,7 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
                 clip = w.load_clip(te["qwen_3vl_4b"], type="krea2")
             case Arch.qwen2:
                 clip = w.load_clip(te["qwen_3vl_8b"], type="qwen_image")
-            case Arch.p_h3:
+            case Arch.h3:
                 clip = w.load_clip(te["minimax"], type="minimax")
             case _:
                 raise RuntimeError(f"No text encoder for model architecture {arch.name}")
@@ -1189,7 +1189,7 @@ def refine(
     return w
 
 
-def _p_h3_sample(w: ComfyWorkflow, model: Output, prompt: Output, latent: Output, seed: int):
+def _h3_sample(w: ComfyWorkflow, model: Output, prompt: Output, latent: Output, seed: int):
     guider = w.basic_guider(model, prompt)
     return w.add(
         "SamplerCustomAdvanced",
@@ -1197,12 +1197,12 @@ def _p_h3_sample(w: ComfyWorkflow, model: Output, prompt: Output, latent: Output
         noise=w.random_noise(seed),
         guider=guider,
         sampler=w.sampler_select("er_sde"),
-        sigmas=w.manual_sigmas(p_h3_sigmas),
+        sigmas=w.manual_sigmas(h3_sigmas),
         latent_image=latent,
     )[1]
 
 
-def generate_p_h3(
+def generate_h3(
     w: ComfyWorkflow,
     checkpoint: CheckpointInput,
     extent: ScaledExtent,
@@ -1215,9 +1215,9 @@ def generate_p_h3(
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.p_h3_conditioning(clip.model, vae, positive, extent.initial)
+    prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
     latent = w.batch_latent(latent, misc.batch_count)
-    out_latent = _p_h3_sample(w, model, prompt, latent, sampling.seed)
+    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     out_image = scale_to_target(extent, w, out_image, models)
@@ -1225,7 +1225,7 @@ def generate_p_h3(
     return w
 
 
-def refine_p_h3(
+def refine_h3(
     w: ComfyWorkflow,
     image: Image,
     extent: ScaledExtent,
@@ -1241,9 +1241,9 @@ def refine_p_h3(
     in_image = w.load_image(image)
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.p_h3_conditioning(clip.model, vae, positive, extent.initial, image=in_image)
+    prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial, image=in_image)
     latent = w.batch_latent(latent, misc.batch_count)
-    out_latent = _p_h3_sample(w, model, prompt, latent, sampling.seed)
+    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
     out_image = scale_to_target(extent, w, out_image, models)
@@ -1251,7 +1251,7 @@ def refine_p_h3(
     return w
 
 
-def inpaint_p_h3(
+def inpaint_h3(
     w: ComfyWorkflow,
     images: ImageInput,
     checkpoint: CheckpointInput,
@@ -1286,10 +1286,10 @@ def inpaint_p_h3(
     region_mask = w.crop_mask(inpaint_mask, initial_bounds)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
-    prompt, latent = w.p_h3_conditioning(
+    prompt, latent = w.h3_conditioning(
         clip.model, vae, positive, initial_bounds.extent, image=region
     )
-    out_latent = _p_h3_sample(w, model, prompt, latent, sampling.seed)
+    out_latent = _h3_sample(w, model, prompt, latent, sampling.seed)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     out_image = w.color_match(out_image, region, region_mask, misc.color_match)
     if initial_bounds.extent != target_bounds.extent:
@@ -1900,19 +1900,19 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     layer_count = i.images.layer_count if i.images else 1
     misc = MiscParams(i.batch_count, layer_count, i.color_match, i.nsfw_filter)
     arch = ensure(i.models).version
-    is_p_h3 = arch is Arch.p_h3
+    is_h3 = arch is Arch.h3
 
-    if is_p_h3 and i.kind is WorkflowKind.refine_region:
+    if is_h3 and i.kind is WorkflowKind.refine_region:
         raise PluginError(
             _(
-                "P-H3 Image does not support region layers."
+                "MiniMax H3 does not support region layers."
                 " Use a selection or edit mode without regions instead."
             )
         )
 
     if i.kind is WorkflowKind.generate:
-        if is_p_h3:
-            return generate_p_h3(
+        if is_h3:
+            return generate_h3(
                 workflow,
                 ensure(i.models),
                 ScaledExtent.from_input(i.extent),
@@ -1931,8 +1931,8 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.inpaint:
-        if is_p_h3:
-            return inpaint_p_h3(
+        if is_h3:
+            return inpaint_h3(
                 workflow,
                 ensure(i.images),
                 ensure(i.models),
@@ -1955,8 +1955,8 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine:
-        if is_p_h3:
-            return refine_p_h3(
+        if is_h3:
+            return refine_h3(
                 workflow,
                 i.image,
                 ScaledExtent.from_input(i.extent),

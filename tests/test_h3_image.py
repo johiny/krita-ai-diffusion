@@ -1,7 +1,7 @@
-"""P-H3 Image support: architecture detection and prompt shape.
+"""MiniMax H3 support: architecture detection and prompt shape.
 
-The model is a distilled MiniMax-H3 image model: one conditioning node builds both the
-conditioning and the latent, sampling uses a fixed 8-step schedule and no CFG.
+The family (P-H3 Image distillation and its finetunes) uses one conditioning node that builds
+both the conditioning and the latent, a fixed 8-step schedule and no CFG.
 """
 
 import json
@@ -91,13 +91,13 @@ def client_models() -> ClientModels:
     models = ClientModels()
     models.node_inputs = node_defs()
     models.checkpoints = {
-        CHECKPOINT: CheckpointInfo(CHECKPOINT, resources.Arch.p_h3, FileFormat.diffusion)
+        CHECKPOINT: CheckpointInfo(CHECKPOINT, resources.Arch.h3, FileFormat.diffusion)
     }
     models.resources = {
         resources.resource_id(
             resources.ResourceKind.text_encoder, resources.Arch.all, "minimax"
         ): TEXT_ENCODER,
-        resources.resource_id(resources.ResourceKind.vae, resources.Arch.p_h3, "default"): VAE,
+        resources.resource_id(resources.ResourceKind.vae, resources.Arch.h3, "default"): VAE,
     }
     return models
 
@@ -118,20 +118,46 @@ def prompt(positive="a lighthouse at dusk"):
 
 
 def test_arch_detected_from_filename():
-    assert resources.Arch.from_string("unknown", "eps", CHECKPOINT) is resources.Arch.p_h3
+    assert resources.Arch.from_string("unknown", "eps", CHECKPOINT) is resources.Arch.h3
     assert resources.Arch.from_string("unknown", "eps", "P-H3-Image_v1.safetensors") is (
-        resources.Arch.p_h3
+        resources.Arch.h3
     )
 
 
-def test_other_minimax_h3_files_are_not_p_h3():
-    for name in ("DasiwaMinimaxH3_dasiwaHybridV4_int8.safetensors", "h3ErosMax_beta7.safetensors"):
+def test_h3_finetunes_are_the_h3_arch():
+    names = (
+        "DasiwaMinimaxH3_dasiwaHybridV4_int8.safetensors",
+        "h3ErosMax_beta7_3346133.safetensors",
+        "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    )
+    for name in names:
         result = resources.Arch.from_string("unknown", "eps", name)
-        assert result is not resources.Arch.p_h3
+        assert result is resources.Arch.h3, name
+
+
+def test_base_model_value_from_server():
+    # comfyui-tooling-nodes reports "minimax-h3" once model_names knows the MiniMaxH3 class,
+    # so the arch must resolve without relying on the filename.
+    assert resources.Arch.from_string("minimax-h3", "eps", "whatever.safetensors") is (
+        resources.Arch.h3
+    )
+
+
+def test_h3_arch_settings():
+    for arch in (resources.Arch.h3,):
+        assert arch.supports_edit
+        assert not arch.is_edit
+        assert not arch.supports_cfg
+        assert arch.text_encoders == ["minimax"]
+        assert arch in resources.Arch.list()
+
+    from ai_diffusion.backend import resolution
+
+    assert resolution.diffusion_multiple(resources.Arch.h3) == 32
 
 
 def test_arch_flags():
-    arch = resources.Arch.p_h3
+    arch = resources.Arch.h3
     assert arch.supports_edit
     assert not arch.is_edit
     assert not arch.supports_cfg
@@ -144,7 +170,7 @@ def test_arch_flags():
 def test_diffusion_multiple_is_32():
     from ai_diffusion.backend import resolution
 
-    assert resolution.diffusion_multiple(resources.Arch.p_h3) == 32
+    assert resolution.diffusion_multiple(resources.Arch.h3) == 32
 
 
 # --- prompt shape -----------------------------------------------------------
@@ -162,14 +188,14 @@ def test_text_to_image_graph():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
     extent = ScaledExtent.no_scaling(Extent(1024, 768))
-    w = workflow.generate_p_h3(
+    w = workflow.generate_h3(
         w,
-        CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
         extent,
         prompt(),
         sampling(),
         misc(),
-        models.for_arch(resources.Arch.p_h3),
+        models.for_arch(resources.Arch.h3),
     )
 
     types = class_types(w)
@@ -199,14 +225,14 @@ def test_text_to_image_graph():
 def test_clip_loader_uses_minimax_type():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
-    workflow.generate_p_h3(
+    workflow.generate_h3(
         w,
-        CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
         ScaledExtent.no_scaling(Extent(512, 512)),
         prompt(),
         sampling(),
         misc(),
-        models.for_arch(resources.Arch.p_h3),
+        models.for_arch(resources.Arch.h3),
     )
     (clip,) = nodes_of(w, "CLIPLoader")
     assert clip["inputs"]["clip_name"] == TEXT_ENCODER
@@ -216,15 +242,15 @@ def test_clip_loader_uses_minimax_type():
 def test_edit_graph_passes_reference_image():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
-    w = workflow.refine_p_h3(
+    w = workflow.refine_h3(
         w,
         Image.create(Extent(64, 64)),
         ScaledExtent.no_scaling(Extent(64, 64)),
-        CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
         prompt("Edit <Picture 1>. Change the sky to sunset."),
         sampling(),
         misc(),
-        models.for_arch(resources.Arch.p_h3),
+        models.for_arch(resources.Arch.h3),
     )
     (ph3,) = nodes_of(w, "PH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
@@ -234,14 +260,14 @@ def test_edit_graph_passes_reference_image():
 def test_batch_uses_repeat_latent_batch():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
-    workflow.generate_p_h3(
+    workflow.generate_h3(
         w,
-        CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
         ScaledExtent.no_scaling(Extent(512, 512)),
         prompt(),
         sampling(),
         misc(batch=3),
-        models.for_arch(resources.Arch.p_h3),
+        models.for_arch(resources.Arch.h3),
     )
     assert "RepeatLatentBatch" in class_types(w)
 
@@ -252,7 +278,7 @@ def test_selection_crops_and_composites():
     wf_input = workflow.WorkflowInput(
         workflow.WorkflowKind.inpaint,
         ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e), Image.create(e)),
-        models=CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
         sampling=sampling(),
         conditioning=ConditioningInput("make it snowy", ""),
         inpaint=InpaintParams(InpaintMode.custom, Bounds(128, 128, 256, 256), grow=8, feather=8),
@@ -279,7 +305,7 @@ def test_region_layers_are_rejected():
         ImageInput(
             ExtentInput(Extent(512, 512), Extent(512, 512), Extent(512, 512), Extent(512, 512))
         ),
-        models=CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
     )
     with pytest.raises(Exception, match="region"):
         workflow.create(wf_input, models)
@@ -288,13 +314,13 @@ def test_region_layers_are_rejected():
 def test_prompt_json_is_serializable():
     models = client_models()
     w = ComfyWorkflow(node_defs=models.node_inputs)
-    workflow.generate_p_h3(
+    workflow.generate_h3(
         w,
-        CheckpointInput(CHECKPOINT, resources.Arch.p_h3),
+        CheckpointInput(CHECKPOINT, resources.Arch.h3),
         ScaledExtent.no_scaling(Extent(512, 512)),
         prompt(),
         sampling(),
         misc(),
-        models.for_arch(resources.Arch.p_h3),
+        models.for_arch(resources.Arch.h3),
     )
     json.dumps(w.root)  # must not raise

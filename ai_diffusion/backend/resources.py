@@ -93,7 +93,7 @@ class Arch(Enum):
     zimage = "Z-Image"
     ernie = "ERNIE Image"
     krea2 = "Krea 2"
-    p_h3 = "P-H3 Image"
+    h3 = "MiniMax H3"
 
     auto = "Automatic"
     all = "All"
@@ -103,8 +103,13 @@ class Arch(Enum):
         filename = filename.lower() if filename else ""
         # ComfyUI reports base_model "unknown" for P-H3 Image (and for other MiniMax H3 files),
         # so the filename is the discriminator.
-        if "p-h3" in filename or "p_h3" in filename:
-            return Arch.p_h3
+        # Every MiniMax H3 checkpoint - the P-H3 Image distillation and its finetunes (DaSiWa,
+        # ErosMax, ref2va) - reports base_model "unknown" and runs the same image conditioning,
+        # so the filename token decides the family.
+        if string in ("minimax-h3", "minimax_h3"):
+            return Arch.h3
+        if "h3" in filename or "minimax" in filename:
+            return Arch.h3
         if string == "sd15":
             return Arch.sd15
         if string == "sdxl" and model_type == "v-prediction":
@@ -201,7 +206,7 @@ class Arch(Enum):
 
     @property
     def supports_cfg(self):
-        return self not in [Arch.flux, Arch.flux_k, Arch.p_h3]
+        return self not in [Arch.flux, Arch.flux_k, Arch.h3]
 
     @property
     def supports_alpha(self):
@@ -213,7 +218,7 @@ class Arch(Enum):
 
     @property
     def supports_edit(self):  # includes text-to-image models that can also edit
-        return self.is_edit or self.is_flux2 or self in (Arch.qwen2, Arch.p_h3)
+        return self.is_edit or self.is_flux2 or self in (Arch.qwen2, Arch.h3)
 
     @property
     def is_sdxl_like(self):
@@ -261,7 +266,7 @@ class Arch(Enum):
                 return ["ministral"]
             case Arch.krea2:
                 return ["qwen_3vl_4b"]
-            case Arch.p_h3:
+            case Arch.h3:
                 return ["minimax"]
             case _:
                 raise ValueError(f"Unsupported architecture: {self}")
@@ -288,7 +293,7 @@ class Arch(Enum):
             Arch.zimage,
             Arch.ernie,
             Arch.krea2,
-            Arch.p_h3,
+            Arch.h3,
         ]
 
 
@@ -860,7 +865,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.vae, Arch.zimage, "default"): ["z-image", "flux-", "flux_", "flux/", "flux1", "ae.s"],
     resource_id(ResourceKind.vae, Arch.ernie, "default"): ["flux2"],
     resource_id(ResourceKind.vae, Arch.krea2, "default"): ["qwen_image"],
-    resource_id(ResourceKind.vae, Arch.p_h3, "default"): ["p-h3-image_vae", "p_h3_image_vae"],
+    resource_id(ResourceKind.vae, Arch.h3, "default"): ["p-h3-image_vae", "p_h3_image_vae"],
 }
 # fmt: on
 

@@ -463,7 +463,7 @@ class ComfyWorkflow:
     def manual_sigmas(self, sigmas: str):
         return self.add("ManualSigmas", 1, sigmas=sigmas)
 
-    def p_h3_conditioning(
+    def h3_conditioning(
         self,
         clip: Output,
         vae: Output,
@@ -471,7 +471,7 @@ class ComfyWorkflow:
         extent: Extent,
         image: Output | None = None,
     ):
-        """P-H3 Image conditioning. Returns (conditioning, latent) - the node builds its own latent.
+        """MiniMax H3 conditioning. Returns (conditioning, latent) - the node builds its own latent.
 
         Reference images are flattened as ``images.image_N`` keys (autogrow inputs).
         """
