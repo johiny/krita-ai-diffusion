@@ -220,13 +220,7 @@ class ComfyClient(Client):
 
         models.upscalers = nodes.options("UpscaleModelLoader", "model_name")
         available_resources.update(_find_upscalers(models.upscalers))
-        if resources.rtx_vsr_node in nodes:
-            models.upscalers.append(resources.rtx_vsr_node)
-
-        # Optional: NVIDIA RTX Video Super Resolution (official VFX node pack)
-        models.rtx_vsr = _find_rtx_vsr(nodes)
-        if models.rtx_vsr is not None:
-            models.upscalers.append(resources.rtx_vsr_node)
+        _add_rtx_upscaler(nodes, models)
 
         inpaint_models = nodes.options("INPAINT_LoadInpaintModel", "model_name")
         available_resources.update(_find_inpaint_models(inpaint_models))
@@ -830,6 +824,18 @@ def _combo_options(input_def: list | None) -> list[str]:
     if isinstance(input_def[0], list):
         return [str(o) for o in input_def[0]]
     return []
+
+
+def _add_rtx_upscaler(nodes: ComfyObjectInfo, models: ClientModels) -> None:
+    """Expose the RTX VSR node exactly once, together with the schema it supports.
+
+    The node is not a checkpoint, so it is not in `UpscaleModelLoader` and has to be appended to
+    the upscaler list by hand. It used to be appended twice - once for being present, once for its
+    schema being readable - which put two identical entries in the Upscale dropdown.
+    """
+    models.rtx_vsr = _find_rtx_vsr(nodes)
+    if resources.rtx_vsr_node in nodes and resources.rtx_vsr_node not in models.upscalers:
+        models.upscalers.append(resources.rtx_vsr_node)
 
 
 def _find_rtx_vsr(nodes: ComfyObjectInfo) -> dict[str, Any] | None:
