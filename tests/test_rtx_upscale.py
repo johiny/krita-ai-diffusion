@@ -10,7 +10,7 @@ import math
 from ai_diffusion.backend import resources, workflow
 from ai_diffusion.backend.api import UpscaleInput
 from ai_diffusion.backend.client import ClientModels
-from ai_diffusion.backend.comfy_client import _find_rtx_vsr
+from ai_diffusion.backend.comfy_client import _add_rtx_upscaler, _find_rtx_vsr
 from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo, ComfyWorkflow
 from ai_diffusion.image import Extent, Image
 
@@ -119,6 +119,39 @@ def test_rtx_node_absent():
     info = _find_rtx_vsr(object_info(None))
     assert info is None
     assert resources.rtx_vsr_node not in models.upscalers
+
+
+def test_rtx_upscaler_is_listed_once():
+    models = ClientModels()
+    models.upscalers = ["4x.pth"]
+    _add_rtx_upscaler(object_info(rtx_node_info(quality_01x)), models)
+    assert models.upscalers.count(resources.rtx_vsr_node) == 1
+    assert models.rtx_vsr is not None
+
+
+def test_rtx_upscaler_list_is_stable_when_refreshed():
+    models = ClientModels()
+    models.upscalers = ["4x.pth"]
+    nodes = object_info(rtx_node_info(quality_01x))
+    _add_rtx_upscaler(nodes, models)
+    _add_rtx_upscaler(nodes, models)
+    assert models.upscalers == ["4x.pth", resources.rtx_vsr_node]
+
+
+def test_rtx_upscaler_still_listed_with_unknown_schema():
+    models = ClientModels()
+    models.upscalers = ["4x.pth"]
+    _add_rtx_upscaler(object_info({"input": {"required": {}}, "output": ["IMAGE"]}), models)
+    assert models.upscalers == ["4x.pth", resources.rtx_vsr_node]
+    assert models.rtx_vsr is None
+
+
+def test_rtx_upscaler_absent_is_not_invented():
+    models = ClientModels()
+    models.upscalers = ["4x.pth"]
+    _add_rtx_upscaler(object_info(None), models)
+    assert models.upscalers == ["4x.pth"]
+    assert models.rtx_vsr is None
 
 
 def test_rtx_node_legacy_schema_has_no_strength():
