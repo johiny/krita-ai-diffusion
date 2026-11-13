@@ -553,17 +553,43 @@ class Image:
         H3 reduces the mask to its 16x latent and keeps the maximum of every 2x2 patch, so a single
         painted pixel switches on the whole 32x32 cell. Rounding the border to cell edges here makes
         the regenerated area the one the user selected instead of up to a cell larger.
-        """
-        import numpy as np
 
-        data = image.to_array()[:, :, 0] >= 0.5
-        h, w = data.shape
-        cells = np.zeros((h, w), dtype=bool)
-        for y in range(0, h, grid):
-            for x in range(0, w, grid):
-                cells[y : y + grid, x : x + grid] = data[y : y + grid, x : x + grid].any()
-        packed = np.where(cells, 255, 0).astype(np.uint8).tobytes()
-        return Image.from_packed_bytes(QByteArray(packed), Extent(w, h), channels=1)
+        Pure-Qt implementation to avoid requiring numpy in Krita's embedded Python.
+        """
+        from PyQt6.QtGui import QImage, QPainter
+
+        src = image._qimage
+        if src.format() != QImage.Format.Format_Grayscale8:
+            src = src.convertToFormat(QImage.Format.Format_Grayscale8)
+
+        w, h = src.width(), src.height()
+        dst = QImage(w, h, QImage.Format.Format_Grayscale8)
+        dst.fill(0)
+
+        # Scan in 32x32 cells: if any pixel in the cell is >= 128, light the whole cell.
+        for y0 in range(0, h, grid):
+            y1 = min(y0 + grid, h)
+            for x0 in range(0, w, grid):
+                x1 = min(x0 + grid, w)
+                cell_on = False
+                for y in range(y0, y1):
+                    line = src.scanLine(y)
+                    if line is None:
+                        continue
+                    ptr = line.asstring(w)  # full line
+                    # Any byte >= 128 in the cell range means the cell is on
+                    for b in ptr[x0:x1]:
+                        if b >= 128:
+                            cell_on = True
+                            break
+                    if cell_on:
+                        break
+                if cell_on:
+                    painter = QPainter(dst)
+                    painter.fillRect(x0, y0, x1 - x0, y1 - y0, 255)
+                    painter.end()
+
+        return Image(dst)
 
     @staticmethod
     def compare(img_a: Image, img_b: Image):
