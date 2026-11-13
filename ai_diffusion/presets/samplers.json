@@ -117,7 +117,7 @@
         "minimum_steps": 8,
         "cfg": 1.0
     },
-    "MiniMax H3-Image - 6 steps": {
+    "MiniMax H3 - 6 steps": {
         "cfg": 1.0,
         "minimum_steps": 6,
         "sampler": "euler",

@@ -30,9 +30,9 @@ from ai_diffusion.image import Bounds, Extent, Image
 from ai_diffusion.style import h3_sampler_preset
 from ai_diffusion.util import PluginError
 
-CHECKPOINT = "p-h3-image_w4a8.safetensors"
-TEXT_ENCODER = "p-h3-image_text_encoder_w4a8.safetensors"
-VAE = "p-h3-image_vae_int8_convrot.safetensors"
+CHECKPOINT = "minimax_h3_image_pruned_int8_convrot.safetensors"
+TEXT_ENCODER = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+VAE = "minimax_h3_image_vae_fp16.safetensors"
 
 
 def mask_with_rect(extent: Extent, rect: Bounds) -> Image:
@@ -70,7 +70,7 @@ def node_defs() -> ComfyObjectInfo:
                 }
             }
         },
-        "PH3ImageConditioning": {
+        "MiniMaxH3ImageConditioning": {
             "input": {
                 "required": {
                     "clip": ["CLIP", {}],
@@ -147,7 +147,7 @@ def client_models() -> ClientModels:
     }
     models.resources = {
         resources.resource_id(
-            resources.ResourceKind.text_encoder, resources.Arch.all, "minimax"
+            resources.ResourceKind.text_encoder, resources.Arch.h3, "qwen_3vl_32b"
         ): TEXT_ENCODER,
         resources.resource_id(resources.ResourceKind.vae, resources.Arch.h3, "default"): VAE,
     }
@@ -232,7 +232,7 @@ def test_h3_arch_settings():
         assert arch.supports_edit
         assert not arch.is_edit
         assert not arch.supports_cfg
-        assert arch.text_encoders == ["minimax"]
+        assert arch.text_encoders == ["qwen_3vl_32b"]
         assert arch in resources.Arch.list()
 
     from ai_diffusion.backend import resolution
@@ -247,7 +247,7 @@ def test_arch_flags():
     assert not arch.supports_cfg
     assert not arch.supports_regions
     assert not arch.has_controlnet_inpaint
-    assert arch.text_encoders == ["minimax"]
+    assert arch.text_encoders == ["qwen_3vl_32b"]
     assert arch in resources.Arch.list()
 
 
@@ -283,8 +283,7 @@ def test_text_to_image_graph():
     )
 
     types = class_types(w)
-    assert "PH3ImageConditioning" in types
-    assert "MiniMaxH3SigmaShift" in types
+    assert "MiniMaxH3ImageConditioning" in types
     assert "BasicGuider" in types
     assert "SamplerCustomAdvanced" in types
     assert "ManualSigmas" in types
@@ -292,7 +291,7 @@ def test_text_to_image_graph():
     assert "EmptyLatentImage" not in types
     assert "RepeatLatentBatch" not in types  # batch 1
 
-    (ph3,) = nodes_of(w, "PH3ImageConditioning")
+    (ph3,) = nodes_of(w, "MiniMaxH3ImageConditioning")
     assert ph3["inputs"]["width"] == 1024
     assert ph3["inputs"]["height"] == 768
     assert "images.image_1" not in ph3["inputs"]
@@ -337,7 +336,7 @@ def test_unknown_sampler_falls_back_to_distilled_default():
         models.for_arch(resources.Arch.h3),
     )
     (sampler,) = nodes_of(w, "KSamplerSelect")
-    assert sampler["inputs"]["sampler_name"] == "er_sde"
+    assert sampler["inputs"]["sampler_name"] == "euler"
 
 
 def test_scheduler_and_steps_are_configurable():
@@ -372,7 +371,7 @@ def test_cfg_adds_a_second_conditioning_and_cfg_guider():
         models.for_arch(resources.Arch.h3),
     )
     types = class_types(w)
-    assert types.count("PH3ImageConditioning") == 2
+    assert types.count("MiniMaxH3ImageConditioning") == 2
     (guider,) = nodes_of(w, "CFGGuider")
     assert math.isclose(guider["inputs"]["cfg"], 4.0)
     assert "BasicGuider" not in types
@@ -391,7 +390,7 @@ def test_default_cfg_uses_basic_guider():
         models.for_arch(resources.Arch.h3),
     )
     types = class_types(w)
-    assert types.count("PH3ImageConditioning") == 1
+    assert types.count("MiniMaxH3ImageConditioning") == 1
     assert "BasicGuider" in types
     assert "CFGGuider" not in types
 
@@ -444,12 +443,12 @@ def test_edit_graph_passes_reference_image():
         Image.create(Extent(64, 64)),
         ScaledExtent.no_scaling(Extent(64, 64)),
         CheckpointInput(CHECKPOINT, resources.Arch.h3),
-        prompt("Edit <Picture 1>. Change the sky to sunset."),
+        prompt("Edit <image_1>. Change the sky to sunset."),
         sampling(),
         misc(),
         models.for_arch(resources.Arch.h3),
     )
-    (ph3,) = nodes_of(w, "PH3ImageConditioning")
+    (ph3,) = nodes_of(w, "MiniMaxH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
     assert isinstance(ph3["inputs"]["images.image_1"], list)
 
@@ -491,7 +490,7 @@ def test_selection_crops_and_composites():
     assert "ETN_ApplyMaskToImage" in types  # result pasted back through the mask
     assert "KSampler" not in types
 
-    (ph3,) = nodes_of(w, "PH3ImageConditioning")
+    (ph3,) = nodes_of(w, "MiniMaxH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
     # 256 selection + 64 px of context on each side: the model needs to see the surroundings.
     # Then rendered at 4 MP (capped at 4x linear) - 384 * 4 = 1536.
@@ -556,7 +555,7 @@ def test_refine_with_a_selection_is_treated_as_a_crop_edit():
     w = workflow.create(wf_input, models)
     types = class_types(w)
     assert "ImageCrop" in types
-    assert "PH3ImageConditioning" in types
+    assert "MiniMaxH3ImageConditioning" in types
     assert "ETN_ApplyMaskToImage" in types
 
 
@@ -569,7 +568,7 @@ def test_builtin_style_matches_the_h3_family():
     style = Style.load(path)
     assert style is not None
     assert style.sampler == h3_sampler_preset
-    assert style.sampler_steps == 8
+    assert style.sampler_steps == 6
     assert math.isclose(style.cfg_scale, 1.0)
 
     models = client_models()
@@ -591,30 +590,6 @@ def test_prompt_json_is_serializable():
     )
     json.dumps(w.root)  # must not raise
 
-
-def test_edit_seeds_the_latent_from_the_image_when_available():
-    models = with_h3_image_studio(client_models())
-    e = Extent(512, 512)
-    wf_input = workflow.WorkflowInput(
-        workflow.WorkflowKind.refine,
-        ImageInput(ExtentInput(e, e, e, e), Image.create(e)),
-        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
-        conditioning=ConditioningInput("add snow", ""),
-        sampling=sampling(),
-        batch_count=1,
-    )
-    w = workflow.create(wf_input, models)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    assert prepare["inputs"]["mode"] == "image_to_image (FL2VA)"
-    assert prepare["inputs"]["frame_preset"] == "single image | 1 frame (image VAE)"
-    assert math.isclose(prepare["inputs"]["preserve_strength"], 0.6)
-    assert "PH3ImageConditioning" not in class_types(w)
-    # El latent viene del nodo, no de un VAEEncode: no se puede codificar aparte.
-    assert "VAEEncode" not in class_types(w)
-
-
-# --- references (REF2VA) ----------------------------------------------------
 
 def refs(count: int) -> list:
     return [
@@ -649,56 +624,6 @@ def generate_workflow(models, reference_count: int):
     return workflow.create(wf_input, models)
 
 
-def test_edit_with_references_switches_to_ref2va():
-    models = with_h3_image_studio(client_models())
-    w = edit_workflow(models, 2)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    inputs = prepare["inputs"]
-    assert inputs["mode"] == "reference_edit (REF2VA)"
-    assert "reference_image_2" in inputs
-    assert "reference_image_3" in inputs
-    assert "reference_image_4" not in inputs
-    # El lienzo sigue siendo <Picture 1>.
-    assert isinstance(inputs["source_image"], list)
-    assert "ETN_LoadImageCache" in class_types(w)
-
-
-def test_edit_reference_prompt_keeps_picture_1_in_charge():
-    models = with_h3_image_studio(client_models())
-    w = edit_workflow(models, 1)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    prompt = prepare["inputs"]["prompt"]
-    assert prompt.startswith("Edit <Picture 1>, the picture currently on the canvas.")
-    assert "The instruction refers to <Picture 1> unless it names another picture." in prompt
-    assert "Apply exactly the changes it asks for and leave the rest of <Picture 1> unchanged" in prompt
-    assert prompt.endswith("make the dress red")
-
-
-def test_edit_without_references_stays_image_to_image():
-    models = with_h3_image_studio(client_models())
-    w = edit_workflow(models, 0)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    assert prepare["inputs"]["mode"] == "image_to_image (FL2VA)"
-    assert not any(k.startswith("reference_image_") for k in prepare["inputs"])
-    assert not prepare["inputs"]["prompt"].startswith("Edit <Picture 1>.")
-
-
-def test_generate_with_references_builds_the_subject_from_them():
-    models = with_h3_image_studio(client_models())
-    w = generate_workflow(models, 2)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    inputs = prepare["inputs"]
-    assert inputs["mode"] == "reference_edit (REF2VA)"
-    assert "reference_image_2" in inputs
-    assert "reference_image_3" not in inputs  # la primera referencia es <Picture 1>
-    assert inputs["prompt"].startswith("Create one finished still image")
-    assert "<Picture 1>, <Picture 2>" in inputs["prompt"]
-
-
 def test_more_than_eight_references_is_rejected():
     models = with_h3_image_studio(client_models())
     with pytest.raises(PluginError, match="at most 8 reference layers"):
@@ -710,7 +635,7 @@ def test_references_reach_the_fallback_node_too():
     models = client_models()
     w = edit_workflow(models, 2)
 
-    (ph3,) = nodes_of(w, "PH3ImageConditioning")
+    (ph3,) = nodes_of(w, "MiniMaxH3ImageConditioning")
     assert "images.image_1" in ph3["inputs"]
     assert "images.image_2" in ph3["inputs"]
     assert "images.image_3" in ph3["inputs"]
@@ -724,7 +649,7 @@ def test_layer_placeholders_become_picture_tags():
     template = workflow._layer_replace[resources.Arch.h3]
     text = "Change her hair to the colour of <layer:Hair> and the dress from <layer:Dress>."
     assert replace_layers(text, {"Hair": 2, "Dress": 3}, template) == (
-        "Change her hair to the colour of <Picture 2> and the dress from <Picture 3>."
+        "Change her hair to the colour of <image_2> and the dress from <image_3>."
     )
 
 
@@ -756,7 +681,7 @@ def test_prompt_with_layer_names_reaches_the_conditioning_as_picture_tags():
     from ai_diffusion.style import Style
 
     cond = ConditioningInput(
-        "Change only the hair to the colour of <layer:Hair>, keep <Picture 1> intact.",
+        "Change only the hair to the colour of <layer:Hair>, keep <image_1> intact.",
         "",
         control=[ControlInput(resources.ControlMode.reference, Image.create(Extent(32, 32)), 1.0)],
         edit_reference=True,
@@ -764,21 +689,9 @@ def test_prompt_with_layer_names_reaches_the_conditioning_as_picture_tags():
     prepared, _, meta = workflow.prepare_prompts(
         cond, Style(Path("h3-test.json")), 1234, resources.Arch.h3, None, {"Hair": 2}
     )
-    assert "<Picture 2>" in prepared.positive
+    assert "<image_2>" in prepared.positive
     assert "<layer:" not in prepared.positive
-    assert "<Picture 2>" in meta["prompt_final"]
-
-
-def test_edit_prompt_does_not_have_to_name_the_canvas():
-    """The guide states which picture the instruction refers to, so <Picture 1> is optional."""
-    models = with_h3_image_studio(client_models())
-    w = edit_workflow(models, 1)
-
-    (prepare,) = nodes_of(w, "H3ImagePrepare")
-    prompt = prepare["inputs"]["prompt"]
-    body = prompt.split("\n\n", 1)[1]
-    assert "<Picture 1>" not in body  # el usuario no lo escribió
-    assert prompt.count("<Picture 1>") >= 2  # el guía lo dice dos veces
+    assert "<image_2>" in meta["prompt_final"]
 
 
 def test_manual_agenda_honours_the_step_count():

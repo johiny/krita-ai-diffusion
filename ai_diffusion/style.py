@@ -357,11 +357,8 @@ class SamplerPreset(NamedTuple):
     hidden: bool = False
 
 
-# Preset used by MiniMax H3-Image (native image model): 6 steps, euler + simple, CFG 1.
-h3_image_sampler_preset = "MiniMax H3-Image - 6 steps"
-
-# Preset used by MiniMax H3: the distilled 8-step schedule (scheduler "manual").
-h3_sampler_preset = "MiniMax H3 - distilled 8 steps"
+# Preset used by MiniMax H3 (native image model): 6 steps, euler + simple, CFG 1.
+h3_sampler_preset = "MiniMax H3 - 6 steps"
 
 
 class SamplerPresets:

@@ -192,8 +192,6 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
             case Arch.qwen2:
                 clip = w.load_clip(te["qwen_3vl_8b"], type="qwen_image")
             case Arch.h3:
-                clip = w.load_clip(te["minimax"], type="minimax")
-            case Arch.h3_image:
                 clip = w.load_clip(te["qwen_3vl_32b"], type="minimax")
             case _:
                 raise RuntimeError(f"No text encoder for model architecture {arch.name}")
@@ -211,7 +209,7 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
         model = w.easy_cache(model, arch)
 
     for lora in checkpoint.loras:
-        if arch is Arch.h3 or arch is Arch.h3_image:
+        if arch is Arch.h3:
             # P-H3 / H3-Image LoRAs are model only; routing them through the CLIP loader breaks them.
             if "LoraLoaderBypassModelOnly" in w.node_defs:
                 model = w.load_lora_model_bypass(model, lora.name, lora.strength)
@@ -1235,7 +1233,7 @@ def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent
 def _h3_sampler(sampling: SamplingInput, models: ModelDict):
     """Use the requested sampler when ComfyUI has it, otherwise the distilled default."""
     available = models.all.node_inputs.options("KSamplerSelect", "sampler_name")
-    default = "euler" if models.arch is Arch.h3_image else "er_sde"
+    default = "euler" if models.arch is Arch.h3 else "er_sde"
     return sampling.sampler if sampling.sampler in available else default
 
 
@@ -1298,30 +1296,17 @@ def generate_h3(
     """
     _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
-    model = w.h3_sigma_shift(model)
     positive = cond.positive.prepare(w, cond.style_prompt)
     references = _h3_references(w, cond)
     if references:
-        official = models.arch is Arch.h3_image
-        if official:
-            positive = _h3_prepend(w, positive, _h3_image_merge_guide(len(references)))
-        else:
-            positive = _h3_prepend(w, positive, _h3_merge_guide(len(references)))
+        positive = _h3_prepend(w, positive, _h3_merge_guide(len(references)))
         source, extra = references[0], references[1:]
         prompt, latent = _h3_prepare(
             w, clip.model, vae, positive, extent.initial, source, models, extra
         )
     else:
-        official = models.arch is Arch.h3_image
-        if official:
-            prompt, latent = w.minimax_h3_image_conditioning(clip.model, vae, positive, extent.initial)
-        else:
-            prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
-    official = models.arch is Arch.h3_image
-    if official:
-        negative = None
-    else:
-        negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+        prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
@@ -1348,24 +1333,16 @@ def refine_h3(
     """
     _h3_no_regions(cond)
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
-    model = w.h3_sigma_shift(model)
     in_image = w.load_image(image)
     in_image = scale_to_initial(extent, w, in_image, models)
     positive = cond.positive.prepare(w, cond.style_prompt)
     references = _h3_references(w, cond)
-    official = models.arch is Arch.h3_image
     if references:
-        if official:
-            positive = _h3_prepend(w, positive, _h3_image_edit_guide())
-        else:
-            positive = _h3_prepend(w, positive, _h3_edit_guide())
+        positive = _h3_prepend(w, positive, _h3_edit_guide())
     prompt, latent = _h3_prepare(
         w, clip.model, vae, positive, extent.initial, in_image, models, references
     )
-    if official:
-        negative = None
-    else:
-        negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
     latent = w.batch_latent(latent, misc.batch_count)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
@@ -1398,22 +1375,8 @@ def _h3_references(w: ComfyWorkflow, cond: Conditioning) -> list[Output]:
     return images
 
 
-def _h3_image_edit_guide() -> str:
-    """Guide for the official MiniMax H3-Image edit path.
-
-    The official node reads traits from the pictures the prompt assigns them to, so the canvas
-    has to be named as the picture to keep. ``<image_1>`` is the image on the canvas.
-    """
-    return (
-        "Edit <image_1>, the image currently on the canvas. The instruction refers to <image_1> "
-        "unless it names another image. Apply exactly the changes it asks for and leave the rest of "
-        "<image_1> unchanged; take nothing from another image except what the instruction assigns "
-        "to it."
-    )
-
-
 def _h3_edit_guide() -> str:
-    """Make <Picture 1> win over the references.
+    """Make <image_1> win over the references.
 
     The node tells the model to copy a trait from the picture it is assigned to, so a loose
     instruction ("lilac hair like <Picture 2>") also drags the reference's outfit and background
@@ -1426,22 +1389,16 @@ def _h3_edit_guide() -> str:
     # Nothing is listed as "preserved": naming pose/background/outfit here contradicted every
     # instruction that changes them and the model obeyed the list instead of the prompt.
     return (
-        "Edit <Picture 1>, the picture currently on the canvas. The instruction refers to <Picture 1> "
+        "Edit <image_1>, the image currently on the canvas. The instruction refers to <image_1> "
         "unless it names another picture. Apply exactly the changes it asks for and leave the rest of "
         "<Picture 1> unchanged; take nothing from another picture except what the instruction assigns "
         "to it."
     )
 
 
-def _h3_image_merge_guide(picture_count: int) -> str:
-    """There is no canvas to preserve, so the references are the subject and the description rules."""
-    pictures = ", ".join(f"<image_{index}>" for index in range(1, picture_count + 1))
-    return f"Create one finished still image that takes its subject from {pictures}, as described."
-
-
 def _h3_merge_guide(picture_count: int) -> str:
     """There is no canvas to preserve, so the references are the subject and the description rules."""
-    pictures = ", ".join(f"<Picture {index}>" for index in range(1, picture_count + 1))
+    pictures = ", ".join(f"<image_{index}>" for index in range(1, picture_count + 1))
     return f"Create one finished still image that takes its subject from {pictures}, as described."
 
 
@@ -1477,21 +1434,14 @@ def _h3_prepare(
     image: Output | None,
     models: ModelDict,
     references: list[Output] | None = None,
-):
+) -> tuple[Output, Output]:
     """Build the H3 conditioning and its latent.
 
-    With an image, prefer the image-to-image node from H3 Image Studio: it seeds the latent from
-    the source, so the edit keeps the composition instead of re-rendering the crop from scratch.
-    Falls back to the reference-image conditioning of the p-h3 node when the pack is missing.
+    The image (if any) becomes <image_1>; references follow as <image_2>..
     """
-    official = models.arch is Arch.h3_image
-    if official:
-        if image is not None:
-            return w.minimax_h3_image_conditioning(clip, vae, prompt, extent, image=image, references=references)
-        return w.minimax_h3_image_conditioning(clip, vae, prompt, extent, references=references)
-    if image is not None and "H3ImagePrepare" in w.node_defs:
-        return w.h3_image_to_image(clip, vae, prompt, image, extent, references=references)
-    return w.h3_conditioning(clip, vae, prompt, extent, image=image, references=references)
+    if image is not None:
+        return w.h3_conditioning(clip, vae, prompt, extent, image=image, references=references)
+    return w.h3_conditioning(clip, vae, prompt, extent, references=references)
 
 
 def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
@@ -1546,7 +1496,6 @@ def inpaint_h3(
     extent = ScaledExtent.from_input(images.extent)
 
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
-    model = w.h3_sigma_shift(model)
 
     in_image = w.load_image(ensure(images.initial_image))
     in_image = scale_to_initial(extent, w, in_image, models)
@@ -1580,11 +1529,7 @@ def inpaint_h3(
     prompt, latent = _h3_prepare(
         w, clip.model, vae, positive, edit_extent, region, models, references
     )
-    official = models.arch is Arch.h3_image
-    if official:
-        negative = None
-    else:
-        negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
+    negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
     # The model rounds the extent (180 -> 176), so bring it back to the exact crop size.
@@ -1954,8 +1899,7 @@ _layer_replace = {
     Arch.flux2_9b: "image {}",
     Arch.qwen_e_p: "Picture {}",
     Arch.qwen2: "<image{}>",
-    Arch.h3: "<Picture {}>",
-    Arch.h3_image: "<image_{}>",
+    Arch.h3: "<image_{}>",
 }
 _control_instructions = {
     ControlMode.style: "Apply the style from {}.",
@@ -2223,10 +2167,9 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     misc = MiscParams(i.batch_count, layer_count, i.color_match, i.nsfw_filter)
     # Plain upscaling and control maps carry no checkpoint, so only sampling jobs know the arch.
     is_h3 = i.models is not None and i.models.version is Arch.h3
-    is_h3_image = i.models is not None and i.models.version is Arch.h3_image
 
     if i.kind is WorkflowKind.generate:
-        if is_h3 or is_h3_image:
+        if is_h3:
             return generate_h3(
                 workflow,
                 ensure(i.models),
@@ -2246,7 +2189,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.inpaint:
-        if is_h3 or is_h3_image:
+        if is_h3:
             return inpaint_h3(
                 workflow,
                 ensure(i.images),
@@ -2269,7 +2212,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine:
-        if is_h3 or is_h3_image:
+        if is_h3:
             return refine_h3(
                 workflow,
                 i.image,

@@ -100,7 +100,6 @@ class Arch(Enum):
     ernie = "ERNIE Image"
     krea2 = "Krea 2"
     h3 = "MiniMax H3"
-    h3_image = "MiniMax H3 Image"
 
     auto = "Automatic"
     all = "All"
@@ -113,10 +112,13 @@ class Arch(Enum):
         # Every MiniMax H3 checkpoint - the P-H3 Image distillation and its finetunes (DaSiWa,
         # ErosMax, ref2va) - reports base_model "unknown" and runs the same image conditioning,
         # so the filename token decides the family.
-        # Official MiniMax H3-Image (native image model, different nodes/VAE/TE than P-H3).
-        if "minimax_h3_image" in filename or "h3_image" in filename or "minimax-h3-image" in filename:
-            return Arch.h3_image
-        if string in ("minimax-h3", "minimax_h3"):
+        # Official MiniMax H3-Image (native image model) and the legacy P-H3 Image
+        # distillation share the same family now: everything MiniMax H3 resolves to
+        # Arch.h3, which drives the official MiniMaxH3ImageConditioning graph.
+        if ("minimax_h3" in filename or "h3_image" in filename or "minimax-h3" in filename
+                or "p-h3" in filename or "h3eros" in filename or "dasiwa" in filename):
+            return Arch.h3
+        if string in ("minimax-h3", "minimax_h3", "minimax-h3-image", "minimax_h3_image"):
             return Arch.h3
         if string == "unknown" and ("h3" in filename or "minimax" in filename):
             return Arch.h3
@@ -216,7 +218,7 @@ class Arch(Enum):
 
     @property
     def supports_cfg(self):
-        return self not in [Arch.flux, Arch.flux_k, Arch.h3, Arch.h3_image]
+        return self not in [Arch.flux, Arch.flux_k, Arch.h3]
 
     @property
     def supports_alpha(self):
@@ -228,7 +230,7 @@ class Arch(Enum):
 
     @property
     def supports_edit(self):  # includes text-to-image models that can also edit
-        return self.is_edit or self.is_flux2 or self in (Arch.qwen2, Arch.h3, Arch.h3_image)
+        return self.is_edit or self.is_flux2 or self in (Arch.qwen2, Arch.h3)
 
     @property
     def is_sdxl_like(self):
@@ -277,8 +279,6 @@ class Arch(Enum):
             case Arch.krea2:
                 return ["qwen_3vl_4b"]
             case Arch.h3:
-                return ["minimax"]
-            case Arch.h3_image:
                 return ["qwen_3vl_32b"]
             case _:
                 raise ValueError(f"Unsupported architecture: {self}")
@@ -306,7 +306,6 @@ class Arch(Enum):
             Arch.ernie,
             Arch.krea2,
             Arch.h3,
-            Arch.h3_image,
         ]
 
 
@@ -855,6 +854,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.text_encoder, Arch.all, "ministral"): ["ministral-3-3b", "ministral"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_4b"): ["qwen3vl_4b", "qwen_3vl_4b", "qwen3-vl-4b"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_8b"): ["qwen3vl_8b", "qwen_3vl_8b", "qwen3-vl-8b"],
+    resource_id(ResourceKind.text_encoder, Arch.h3, "qwen_3vl_32b"): ["qwen3vl_32b", "qwen_3vl_32b", "qwen3-vl-32b"],
     resource_id(ResourceKind.text_encoder, Arch.all, "qwen_3vl_32b"): ["qwen3vl_32b", "qwen_3vl_32b", "qwen3-vl-32b"],
     resource_id(ResourceKind.text_encoder, Arch.all, "minimax"): [
         "p-h3-image_text_encoder",
@@ -879,8 +879,7 @@ search_paths: dict[str, list[str]] = {
     resource_id(ResourceKind.vae, Arch.zimage, "default"): ["z-image", "flux-", "flux_", "flux/", "flux1", "ae.s"],
     resource_id(ResourceKind.vae, Arch.ernie, "default"): ["flux2"],
     resource_id(ResourceKind.vae, Arch.krea2, "default"): ["qwen_image"],
-    resource_id(ResourceKind.vae, Arch.h3, "default"): ["p-h3-image_vae", "p_h3_image_vae"],
-    resource_id(ResourceKind.vae, Arch.h3_image, "default"): ["minimax_h3_image_vae"],
+    resource_id(ResourceKind.vae, Arch.h3, "default"): ["minimax_h3_image_vae", "p-h3-image_vae", "p_h3_image_vae"],
 }
 # fmt: on
 
@@ -920,6 +919,8 @@ required_resource_ids = {
     ResourceId(ResourceKind.vae, Arch.ernie, "default"),
     ResourceId(ResourceKind.text_encoder, Arch.krea2, "qwen_3vl_4b"),
     ResourceId(ResourceKind.vae, Arch.krea2, "default"),
+    ResourceId(ResourceKind.text_encoder, Arch.h3, "qwen_3vl_32b"),
+    ResourceId(ResourceKind.vae, Arch.h3, "default"),
 }
 
 recommended_resource_ids = [
