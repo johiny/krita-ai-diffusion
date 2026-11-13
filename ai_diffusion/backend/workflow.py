@@ -1459,7 +1459,14 @@ def inpaint_h3(
     in_image = w.load_image(ensure(images.initial_image))
     in_image = scale_to_initial(extent, w, in_image, models)
     in_mask = w.load_mask(ensure(images.hires_mask))
-    inpaint_mask = apply_grow_feather(w, in_mask, params)
+    # Hard generation mask: grow (dilation) but NO feather. The community (ethanfel,
+    # minimaxh3.cc, diffusers-modular) is unanimous: feathering the generation mask
+    # creates intermediate timesteps that mix source and repaint at lower contrast,
+    # worsening drift. Feather belongs only in the compositing mask.
+    if params.grow > 0:
+        inpaint_mask = w.expand_mask(in_mask, params.grow, 0)
+    else:
+        inpaint_mask = in_mask
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
