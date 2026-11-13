@@ -1486,13 +1486,7 @@ def inpaint_h3(
     out_image = w.scale_image(out_image, extent.target)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
 
-    # The sampler preserves the canvas through a latent mask, so its output already matches outside
-    # the selection. The mask lives on a 1/16 grid and bleeds outward a little, though, so paste
-    # through the selection again - with a minimum feather - to keep that ring original.
-    compositing_mask = denoise_to_compositing_mask(w, in_mask, params)
-    if params.blend <= 0:
-        compositing_mask = w.shrink_mask(compositing_mask, 8, 16)
-    w.send_image(w.apply_mask(out_image, compositing_mask))
+    w.send_image(out_image)
     return w
 
 

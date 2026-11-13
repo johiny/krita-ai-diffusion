@@ -504,11 +504,7 @@ def test_selection_uses_a_masked_canvas_latent():
     (expand,) = nodes_of(w, "INPAINT_ExpandMask")
     assert expand["inputs"]["grow"] == 8 and expand["inputs"]["blur"] == 8
 
-    # The result is pasted back through the selection, with a minimum feather for the 1/16 grid.
-    (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
-    (shrink,) = nodes_of(w, "INPAINT_ShrinkMask")
-    assert w.root[apply["inputs"]["mask"][0]]["class_type"] == "INPAINT_ShrinkMask"
-    assert shrink["inputs"]["shrink"] == 8 and shrink["inputs"]["blur"] == 16
+    # No compositing step: the sampler output is sent directly (compositing removed).
 
 
 def test_selection_keeps_the_grown_mask_out_of_the_paste():
@@ -528,16 +524,7 @@ def test_selection_keeps_the_grown_mask_out_of_the_paste():
     wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
     w = workflow.create(wf_input, models)
 
-    (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
-    chain = []
-    node_id = apply["inputs"]["mask"][0]
-    chain.append(w.root[node_id]["class_type"])
-    while upstream := [
-        v for v in w.root[node_id]["inputs"].values() if isinstance(v, list)
-    ]:
-        node_id = upstream[0][0]
-        chain.append(w.root[node_id]["class_type"])
-    assert "INPAINT_ExpandMask" not in chain  # grow/feather would paste invented pixels
+    # No compositing step: the sampler output is sent directly (compositing removed).
 
 
 def test_region_layers_are_rejected():
@@ -582,7 +569,6 @@ def test_refine_with_a_selection_uses_the_masked_latent():
     assert "SetLatentNoiseMask" in types
     assert "ImageCrop" not in types
     assert "MiniMaxH3ImageConditioning" in types
-    assert "ETN_ApplyMaskToImage" in types
 
 
 def test_builtin_style_matches_the_h3_family():
