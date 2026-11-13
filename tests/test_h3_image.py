@@ -515,6 +515,33 @@ def test_selection_crops_and_composites():
     assert chain[0] == "ThresholdMask" and chain[1] == "CropMask"
 
 
+def test_edit_extent_is_an_exact_integer_multiple():
+    """The patch is pasted back by scaling the generated crop down again, so the upscale factor
+    has to be an exact integer. A continuous factor rounded to a multiple of 32 resamples x and y
+    by different amounts and the pasted patch drifts against the canvas."""
+    from ai_diffusion.backend.workflow import _h3_context_bounds, _h3_edit_extent
+
+    canvas = Extent(1024, 1024)
+    for side in (192, 256, 320, 384, 448, 512, 640, 896):
+        selection = Bounds(64, 64, side, side)
+        context = _h3_context_bounds(selection, canvas)
+        assert context.x % 32 == 0 and context.y % 32 == 0
+        assert context.width % 32 == 0 and context.height % 32 == 0
+
+        edit = _h3_edit_extent(context.extent)
+        (factor_x, rest_x) = divmod(edit.width, context.width)
+        (factor_y, rest_y) = divmod(edit.height, context.height)
+        assert rest_x == 0 and rest_y == 0, (side, context.extent, edit)
+        assert factor_x == factor_y, (side, context.extent, edit)
+        assert 1 <= factor_x <= 4
+        # the downscale back is exactly 1/factor on both axes: nothing left to drift
+        assert edit.width / context.width == edit.height / context.height
+
+    # A crop that is not a multiple of 32 is rendered 1:1 instead of being resampled by a
+    # fractional factor, which is what produced the misaligned paste.
+    assert _h3_edit_extent(Extent(1000, 900)) == Extent(1000, 900)
+
+
 def test_region_layers_are_rejected():
     from ai_diffusion.backend.api import RegionInput
     from ai_diffusion.image import Bounds

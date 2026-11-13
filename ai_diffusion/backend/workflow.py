@@ -1411,18 +1411,22 @@ def _h3_prepend(w: ComfyWorkflow, prompt: str | Output, guide: str) -> str | Out
 
 
 def _h3_edit_extent(extent: Extent, megapixels: float = 4.0, multiple: int = 32) -> Extent:
-    """Render edits at 4 MP, the resolution the model card recommends (max 4x linear upscale).
+    """Render edits at up to 4 MP, on an exact integer multiple of the crop size.
 
-    Measured on the 3090 with a 640x544 canvas and a 400x360 selection: 2208x1888 in 165 s, with
-    0 px changed outside the selection and no global shift.
+    The generated crop is scaled back down before it is composited, so the factor has to be exact:
+    a continuous factor floored to a multiple of 32 resamples x and y by slightly different amounts
+    (e.g. 1000x900 -> 2144x1920 -> 0.466x by 0.469y) and the pasted patch drifts a few pixels
+    against the canvas, which shows up as a seam along the selection. The node also rounds the
+    extent to a multiple of 32 itself, so the base is only scalable when it is already aligned;
+    otherwise the crop is rendered 1:1 rather than misaligned.
     """
+    if extent.width % multiple or extent.height % multiple:
+        return extent
     target = megapixels * 1024 * 1024
     if extent.pixel_count >= target * 0.9:
         return extent
-    factor = min(math.sqrt(target / extent.pixel_count), 4.0)
-    width = int(extent.width * factor) // multiple * multiple
-    height = int(extent.height * factor) // multiple * multiple
-    return Extent(max(multiple, width), max(multiple, height))
+    factor = max(1, min(int(math.sqrt(target / extent.pixel_count)), 4))
+    return Extent(extent.width * factor, extent.height * factor)
 
 
 def _h3_prepare(
@@ -1524,7 +1528,8 @@ def inpaint_h3(
     if references:
         positive = _h3_prepend(w, positive, _h3_edit_guide())
     edit_extent = _h3_edit_extent(context_bounds.extent)
-    if edit_extent != context_bounds.extent:
+    scale = edit_extent.width // context_bounds.extent.width
+    if scale > 1:
         region = w.scale_image(region, edit_extent)
     prompt, latent = _h3_prepare(
         w, clip.model, vae, positive, edit_extent, region, models, references
@@ -1532,11 +1537,17 @@ def inpaint_h3(
     negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
     out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
-    # The model rounds the extent (180 -> 176), so bring it back to the exact crop size.
-    out_image = w.scale_image(out_image, context_bounds.extent)
-    if context_bounds != initial_selection:
-        offset = (initial_selection.x - context_bounds.x, initial_selection.y - context_bounds.y)
-        out_image = w.crop_image(out_image, Bounds(*offset, *initial_selection.extent))
+    # Cut the selection straight out of the native edit-space output, then scale it down by the
+    # exact inverse factor. Downscaling the whole context crop first and cropping afterwards
+    # compounds the resample error, which is what made the pasted patch drift.
+    offset = (
+        (initial_selection.x - context_bounds.x) * scale,
+        (initial_selection.y - context_bounds.y) * scale,
+    )
+    selection_extent = Extent(initial_selection.width * scale, initial_selection.height * scale)
+    out_image = w.crop_image(out_image, Bounds(offset[0], offset[1], *selection_extent))
+    if scale > 1:
+        out_image = w.scale_image(out_image, initial_selection.extent)
     if initial_selection.extent != extent.initial:
         out_image = w.composite_image_masked(
             out_image, in_image, None, initial_selection.x, initial_selection.y
