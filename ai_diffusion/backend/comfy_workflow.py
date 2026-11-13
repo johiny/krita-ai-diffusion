@@ -531,6 +531,39 @@ class ComfyWorkflow:
             args[f"reference_image_{index}"] = reference
         return self.add("H3ImagePrepare", 2, **args)
 
+    def minimax_h3_image_conditioning(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        extent: Extent,
+        image: Output | None = None,
+        references: list[Output] | None = None,
+    ):
+        """Official MiniMax H3-Image conditioning (MiniMaxH3ImageConditioning).
+
+        Returns (conditioning, latent). Reference images are flattened as
+        ``images.image_N`` keys (autogrow inputs); the first picture is the one
+        being generated/edited, the rest are references. The VAE is passed so
+        reference images are anchored as latents as well as read by the text
+        encoder. No prompt upsampler is chained: the request goes in verbatim.
+        """
+        args: dict[str, Any] = {
+            "clip": clip,
+            "prompt": prompt,
+            "width": extent.width,
+            "height": extent.height,
+            "vae": vae,
+        }
+        images = []
+        if image is not None:
+            images.append(image)
+        for reference in references or []:
+            images.append(reference)
+        for index, picture in enumerate(images, start=1):
+            args[f"images.image_{index}"] = picture
+        return self.add("MiniMaxH3ImageConditioning", 2, **args)
+
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
             "CFGGuider",
