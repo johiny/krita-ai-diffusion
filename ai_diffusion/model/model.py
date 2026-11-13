@@ -962,7 +962,7 @@ class DocumentModel(QObject, ObservableProperties):
         # follow from there: number the `<layer:name>` tokens from 2 even when edit mode is off,
         # otherwise a reference would be called <Picture 1> like the canvas it is editing.
         has_canvas = kind is not None and kind is not WorkflowKind.generate
-        cond.edit_reference = self.is_editing or (self.arch is Arch.h3 and has_canvas)
+        cond.edit_reference = self.is_editing or (self.arch in (Arch.h3, Arch.h3_image) and has_canvas)
         layers = extract_layers(cond)
         add_refs(cond.control, layers)
 

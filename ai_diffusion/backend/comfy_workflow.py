@@ -558,7 +558,7 @@ class ComfyWorkflow:
         images = []
         if image is not None:
             images.append(image)
-        for reference in references or []:
+        for reference in (references or []):
             images.append(reference)
         for index, picture in enumerate(images, start=1):
             args[f"images.image_{index}"] = picture

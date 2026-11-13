@@ -961,7 +961,7 @@ class StylePresets(SettingsTab):
             self._arch_select.set_items([(e.value, e.name) for e in valid_archs])
             if self.current_style.architecture in valid_archs:
                 self._arch_select.value = self.current_style.architecture
-        is_h3 = arch is Arch.h3
+        is_h3 = arch in (Arch.h3, Arch.h3_image)
         self._default_sampler.set_h3_mode(is_h3)
         self._live_sampler.set_h3_mode(is_h3)
         self._clip_skip_check.setEnabled(arch.supports_clip_skip)

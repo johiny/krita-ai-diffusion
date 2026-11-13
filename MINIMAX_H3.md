@@ -84,7 +84,21 @@ row: in a 512x512 A/B test, `dpmpp_2m + karras + 12 steps` returned an abstract 
 instead of the prompted scene, while `dpmpp_2m` with the manual schedule stayed coherent. Use the
 free knobs to explore, not as a quality guarantee.
 
+## Official MiniMax H3-Image (native image model)
+
+The plugin now also drives the official native model, `minimax_h3_image_*` (registered as
+`Arch.h3_image`), using its own node family: `MiniMaxH3ImageConditioning` (clip, prompt, width,
+height + optional vae and autogrow images) and `H3ImageToImagePrepare` for image edits. Recipe:
+6 steps, `euler` + `simple`, CFG 1, no negative prompt, up to 16 reference images addressed as
+`<image_1>`..`<image_16>`. Text encoder Qwen3-VL 32B, VAE `minimax_h3_image_vae_fp16`.
+
+P-H3-Image (`Arch.h3`, Pruna's adaptation of the video model) is still supported; both coexist
+and the plugin picks the builder from the checkpoint's architecture. The official model is a
+different VAE/TE/node family, so mixing components (e.g. the 8B TE with the official DiT) raises
+`mat1 and mat2 shapes cannot be multiplied (…x4096 and 5120x5376)`.
+
 ## Writing prompts
+
 
 There is no prompt upsampler any more: the request reaches the model as typed. The prompt is
 therefore part of the recipe — action first, every trait assigned to a named picture, pose as
