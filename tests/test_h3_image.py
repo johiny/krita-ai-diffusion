@@ -764,3 +764,50 @@ def test_filename_only_decides_when_the_server_says_unknown():
     assert resources.Arch.from_string("flux", "eps", "minimax_lora.safetensors") is (
         resources.Arch.flux
     )
+
+def test_av_checkpoint_wraps_the_seeded_latent_when_the_node_is_available():
+    """The audio/video checkpoints index the second latent stream, so a plain VAEEncode tensor
+    has to be wrapped as (video, zeros_audio) before the sampler sees it."""
+    models = client_models()
+    models.node_inputs.nodes["H3LatentForModel"] = {
+        "input": {"required": {"model": ["MODEL", {}], "samples": ["LATENT", {}]}}
+    }
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.inpaint,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        sampling=sampling(),
+        conditioning=ConditioningInput("make it snowy", ""),
+        inpaint=InpaintParams(InpaintMode.custom, Bounds(128, 128, 256, 256), grow=8, feather=8),
+        crop_upscale_extent=e,
+    )
+    assert wf_input.images is not None
+    wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
+    w = workflow.create(wf_input, models)
+
+    assert "H3LatentForModel" in class_types(w)
+    (mask_node,) = nodes_of(w, "SetLatentNoiseMask")
+    assert w.root[mask_node["inputs"]["samples"][0]]["class_type"] == "H3LatentForModel"
+    (wrapper,) = nodes_of(w, "H3LatentForModel")
+    assert w.root[wrapper["inputs"]["samples"][0]]["class_type"] == "VAEEncode"
+    assert w.root[wrapper["inputs"]["model"][0]]["class_type"] == "UNETLoader"
+
+
+def test_wrapper_is_skipped_when_the_server_does_not_have_it():
+    models = client_models()
+    assert "H3LatentForModel" not in models.node_inputs.nodes
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.inpaint,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        sampling=sampling(),
+        conditioning=ConditioningInput("make it snowy", ""),
+        inpaint=InpaintParams(InpaintMode.custom, Bounds(128, 128, 256, 256), grow=8, feather=8),
+        crop_upscale_extent=e,
+    )
+    assert wf_input.images is not None
+    wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
+    w = workflow.create(wf_input, models)
+    assert "H3LatentForModel" not in class_types(w)

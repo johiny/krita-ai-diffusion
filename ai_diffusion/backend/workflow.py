@@ -1460,6 +1460,11 @@ def inpaint_h3(
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
     latent = w.vae_encode(vae, in_image)
+    # The audio/video checkpoints read the second stream of the latent, so a plain tensor from
+    # VAEEncode crashes them. This node wraps it as (video, zeros_audio) for those checkpoints and
+    # passes it through untouched for the one-frame image ones.
+    if "H3LatentForModel" in w.node_defs:
+        latent = w.add("H3LatentForModel", 1, model=model, samples=latent)
     latent = w.set_latent_noise_mask(latent, inpaint_mask)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
