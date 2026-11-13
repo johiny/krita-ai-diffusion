@@ -1459,7 +1459,8 @@ def inpaint_h3(
     in_image = w.load_image(ensure(images.initial_image))
     in_image = scale_to_initial(extent, w, in_image, models)
     in_mask = w.load_mask(ensure(images.hires_mask))
-    inpaint_mask = apply_grow_feather(w, in_mask, params)
+    mask_params = params.on_grid(h3_mask_grid)
+    inpaint_mask = apply_grow_feather(w, in_mask, mask_params)
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
@@ -1489,8 +1490,8 @@ def inpaint_h3(
     # The sampler preserves the canvas through a latent mask, so its output already matches outside
     # the selection. The mask lives on a 1/16 grid and bleeds outward a little, though, so paste
     # through the selection again - with a minimum feather - to keep that ring original.
-    compositing_mask = denoise_to_compositing_mask(w, in_mask, params)
-    if params.blend <= 0:
+    compositing_mask = denoise_to_compositing_mask(w, in_mask, mask_params)
+    if mask_params.blend <= 0:
         compositing_mask = w.shrink_mask(compositing_mask, 8, 16)
     w.send_image(w.apply_mask(out_image, compositing_mask))
     return w
