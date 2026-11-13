@@ -500,9 +500,9 @@ def test_selection_uses_a_masked_canvas_latent():
     latent_id = sampler["inputs"]["latent_image"][0]
     assert w.root[latent_id]["class_type"] == "SetLatentNoiseMask"
 
-    # grow/feather are rounded to the cell grid
+    # grow/feather are applied as the user set them
     (expand,) = nodes_of(w, "INPAINT_ExpandMask")
-    assert expand["inputs"]["grow"] == 32 and expand["inputs"]["blur"] == 32
+    assert expand["inputs"]["grow"] == 8 and expand["inputs"]["blur"] == 8
 
     # The result is pasted back through the selection, with a minimum feather for the 1/16 grid.
     (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
