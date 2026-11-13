@@ -1450,10 +1450,6 @@ def inpaint_h3(
     latent from the canvas with `VAEEncode` and attach the selection with `SetLatentNoiseMask`
     instead: the sampler then pins every step's output outside the mask to that latent, so only the
     selection is regenerated and nothing has to be cropped or pasted back.
-
-    H3 regenerates whole 2x2 latent patches - 32x32 px with this VAE - and a single painted pixel
-    switches on its entire cell, so the selection is rounded to that grid first. Without it the
-    border sits wherever the crossed cell starts and the result shifts between runs.
     """
     _h3_no_regions(cond)
     extent = ScaledExtent.from_input(images.extent)
@@ -1462,21 +1458,12 @@ def inpaint_h3(
 
     in_image = w.load_image(ensure(images.initial_image))
     in_image = scale_to_initial(extent, w, in_image, models)
-    # H3 regenerates whole 32 px cells (2x2 latent patches on a 16x downscale), so the border is
-    # rounded to that grid before anything else touches it - otherwise the border lands where the
-    # cell that happens to be crossed starts, and the result shifts between runs.
-    in_mask = w.load_mask(Image.snap_mask_to_grid(ensure(images.hires_mask), h3_mask_grid))
-    mask_params = params.on_grid(h3_mask_grid)
-    inpaint_mask = apply_grow_feather(w, in_mask, mask_params)
+    in_mask = w.load_mask(ensure(images.hires_mask))
+    inpaint_mask = apply_grow_feather(w, in_mask, params)
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
     latent = w.vae_encode(vae, in_image)
-    # The audio/video checkpoints read the second stream of the latent, so a plain tensor from
-    # VAEEncode crashes them. This node wraps it as (video, zeros_audio) for those checkpoints and
-    # passes it through untouched for the one-frame image ones.
-    if "H3LatentForModel" in w.node_defs:
-        latent = w.add("H3LatentForModel", 1, model=model, samples=latent)
     latent = w.set_latent_noise_mask(latent, inpaint_mask)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
@@ -1497,11 +1484,9 @@ def inpaint_h3(
     # The sampler preserves the canvas through a latent mask, so its output already matches outside
     # the selection. The mask lives on a 1/16 grid and bleeds outward a little, though, so paste
     # through the selection again - with a minimum feather - to keep that ring original.
-    compositing_mask = denoise_to_compositing_mask(w, in_mask, mask_params)
-    if mask_params.blend <= 0:
-        # The mask is on the cell grid already; one cell of feather keeps the blend centred on the
-        # border instead of creeping inside the selection.
-        compositing_mask = w.shrink_mask(compositing_mask, 0, h3_mask_grid)
+    compositing_mask = denoise_to_compositing_mask(w, in_mask, params)
+    if params.blend <= 0:
+        compositing_mask = w.shrink_mask(compositing_mask, 8, 16)
     w.send_image(w.apply_mask(out_image, compositing_mask))
     return w
 
