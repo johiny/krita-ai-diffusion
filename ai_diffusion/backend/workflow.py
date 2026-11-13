@@ -1410,25 +1410,6 @@ def _h3_prepend(w: ComfyWorkflow, prompt: str | Output, guide: str) -> str | Out
     return prompt  # an already encoded prompt (translation node) cannot be prefixed safely
 
 
-def _h3_edit_extent(extent: Extent, megapixels: float = 4.0, multiple: int = 32) -> Extent:
-    """Render edits at up to 4 MP, on an exact integer multiple of the crop size.
-
-    The generated crop is scaled back down before it is composited, so the factor has to be exact:
-    a continuous factor floored to a multiple of 32 resamples x and y by slightly different amounts
-    (e.g. 1000x900 -> 2144x1920 -> 0.466x by 0.469y) and the pasted patch drifts a few pixels
-    against the canvas, which shows up as a seam along the selection. The node also rounds the
-    extent to a multiple of 32 itself, so the base is only scalable when it is already aligned;
-    otherwise the crop is rendered 1:1 rather than misaligned.
-    """
-    if extent.width % multiple or extent.height % multiple:
-        return extent
-    target = megapixels * 1024 * 1024
-    if extent.pixel_count >= target * 0.9:
-        return extent
-    factor = max(1, min(int(math.sqrt(target / extent.pixel_count)), 4))
-    return Extent(extent.width * factor, extent.height * factor)
-
-
 def _h3_prepare(
     w: ComfyWorkflow,
     clip: Output,
@@ -1448,38 +1429,6 @@ def _h3_prepare(
     return w.h3_conditioning(clip, vae, prompt, extent, references=references)
 
 
-def _h3_context_bounds(bounds: Bounds, canvas: Extent, multiple: int = 32) -> Bounds:
-    """Grow a crop so the model sees surroundings. H3 regenerates the whole crop, so without
-    context the edit has nothing to match and the pasted patch looks pasted."""
-    pad = max(round(bounds.extent.longest_side * 0.25), 32)
-    x0 = max(0, (bounds.x - pad) // multiple * multiple)
-    y0 = max(0, (bounds.y - pad) // multiple * multiple)
-    x1 = min(canvas.width, -(-(bounds.x + bounds.width + pad) // multiple) * multiple)
-    y1 = min(canvas.height, -(-(bounds.y + bounds.height + pad) // multiple) * multiple)
-    return Bounds(x0, y0, x1 - x0, y1 - y0)
-
-
-def _mask_bounds(mask: Image) -> Bounds | None:
-    """Bounding box of the painted area of a mask, in mask pixel coordinates."""
-    data = mask.to_packed_bytes().data()
-    w, h = mask.extent
-    channels = 4 if len(data) == w * h * 4 else 1
-    stride = w * channels
-    step = 2 if w * h > 2_000_000 else 1  # a coarse box is enough, the crop gets padding anyway
-    x0, x1, y0, y1 = w, -1, h, -1
-    for y in range(0, h, step):
-        row = data[y * stride : (y + 1) * stride]
-        if channels == 4:
-            row = row[3::4]
-        if max(row) <= 8:
-            continue
-        y0 = min(y0, y)
-        y1 = y + step
-        x0 = min(x0, next(i for i in range(0, w, step) if row[i] > 8))
-        x1 = max(x1, next(i for i in range(w - 1, -1, -step) if row[i] > 8) + 1)
-    return None if x1 < 0 else Bounds(x0, y0, x1 - x0, y1 - y0)
-
-
 def inpaint_h3(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1490,13 +1439,15 @@ def inpaint_h3(
     misc: MiscParams,
     models: ModelDict,
 ):
-    """P-H3 Image edit limited to a selection.
+    """MiniMax H3 edit limited to a selection.
 
-    The model cannot mask, so the selected region is cropped, regenerated with the crop as
-    reference image, and composited back through the selection mask.
+    The conditioning node hands the sampler an empty latent and injects the canvas as a reference,
+    so a mask alone has nothing to preserve and the model re-composes the whole crop. Seed the
+    latent from the canvas with `VAEEncode` and attach the selection with `SetLatentNoiseMask`
+    instead: the sampler then pins every step's output outside the mask to that latent, so only the
+    selection is regenerated and nothing has to be cropped or pasted back.
     """
     _h3_no_regions(cond)
-    target_bounds = params.target_bounds
     extent = ScaledExtent.from_input(images.extent)
 
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
@@ -1505,57 +1456,33 @@ def inpaint_h3(
     in_image = scale_to_initial(extent, w, in_image, models)
     in_mask = w.load_mask(ensure(images.hires_mask))
     inpaint_mask = apply_grow_feather(w, in_mask, params)
-    # H3 always regenerates the whole crop, so compositing the grown/feathered denoise mask pastes
-    # invented pixels well outside the selection. Keep the paste inside the selection instead and
-    # only fade with `blend`, like the mask the user actually drew.
-    cropped_selection = w.crop_mask(in_mask, target_bounds)
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
-    # The mask image spans the whole canvas, so `target_bounds` is not the selection. Crop to the
-    # painted area instead: regenerating the full canvas lets the model re-compose the character.
-    selection = _mask_bounds(ensure(images.hires_mask)) or Bounds(0, 0, *extent.target)
-    selection = Bounds.intersection(selection, Bounds(0, 0, *extent.target))
-    if selection.area == 0:
-        selection = Bounds(0, 0, *extent.target)
-    initial_selection = extent.convert(selection, "target", "initial")
-    context_bounds = _h3_context_bounds(initial_selection, extent.initial)
-
-    region = w.crop_image(in_image, context_bounds)
+    latent = w.vae_encode(vae, in_image)
+    latent = w.set_latent_noise_mask(latent, inpaint_mask)
 
     positive = cond.positive.prepare(w, cond.style_prompt)
     references = _h3_references(w, cond)
     if references:
         positive = _h3_prepend(w, positive, _h3_edit_guide())
-    edit_extent = _h3_edit_extent(context_bounds.extent)
-    scale = edit_extent.width // context_bounds.extent.width
-    if scale > 1:
-        region = w.scale_image(region, edit_extent)
-    prompt, latent = _h3_prepare(
-        w, clip.model, vae, positive, edit_extent, region, models, references
+    prompt, _ = _h3_prepare(
+        w, clip.model, vae, positive, extent.initial, in_image, models, references
     )
-    negative = _h3_negative(w, cond, clip, vae, edit_extent, sampling)
-    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, edit_extent, models)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
     out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
-    # Cut the selection straight out of the native edit-space output, then scale it down by the
-    # exact inverse factor. Downscaling the whole context crop first and cropping afterwards
-    # compounds the resample error, which is what made the pasted patch drift.
-    offset = (
-        (initial_selection.x - context_bounds.x) * scale,
-        (initial_selection.y - context_bounds.y) * scale,
-    )
-    selection_extent = Extent(initial_selection.width * scale, initial_selection.height * scale)
-    out_image = w.crop_image(out_image, Bounds(offset[0], offset[1], *selection_extent))
-    if scale > 1:
-        out_image = w.scale_image(out_image, initial_selection.extent)
-    if initial_selection.extent != extent.initial:
-        out_image = w.composite_image_masked(
-            out_image, in_image, None, initial_selection.x, initial_selection.y
-        )
+
     out_image = w.color_match(out_image, in_image, inpaint_mask, misc.color_match)
-    out_image = w.scale_image(out_image, target_bounds.extent)
+    out_image = w.scale_image(out_image, extent.target)
     out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
-    compositing_mask = denoise_to_compositing_mask(w, cropped_selection, params)
+
+    # The sampler preserves the canvas through a latent mask, so its output already matches outside
+    # the selection. The mask lives on a 1/16 grid and bleeds outward a little, though, so paste
+    # through the selection again - with a minimum feather - to keep that ring original.
+    compositing_mask = denoise_to_compositing_mask(w, in_mask, params)
+    if params.blend <= 0:
+        compositing_mask = w.shrink_mask(compositing_mask, 8, 16)
     w.send_image(w.apply_mask(out_image, compositing_mask))
     return w
 

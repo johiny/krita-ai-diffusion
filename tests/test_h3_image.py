@@ -468,7 +468,9 @@ def test_batch_uses_repeat_latent_batch():
     assert "RepeatLatentBatch" in class_types(w)
 
 
-def test_selection_crops_and_composites():
+def test_selection_uses_a_masked_canvas_latent():
+    """The conditioning latent is empty, so the selection has to be applied to a latent encoded
+    from the canvas. That is what keeps everything outside the selection unchanged."""
     models = client_models()
     e = Extent(512, 512)
     wf_input = workflow.WorkflowInput(
@@ -485,61 +487,51 @@ def test_selection_crops_and_composites():
     w = workflow.create(wf_input, models)
 
     types = class_types(w)
-    assert "ImageCrop" in types  # only the selection goes to the model
-    assert "CropMask" in types
-    assert "ETN_ApplyMaskToImage" in types  # result pasted back through the mask
-    assert "KSampler" not in types
+    assert "VAEEncode" in types  # the canvas seeds the latent
+    assert "SetLatentNoiseMask" in types  # ... and only the selection denoises
+    assert "ImageCrop" not in types  # no crop/regenerate/paste any more
+    assert "ImageCompositeMasked" not in types
 
-    (ph3,) = nodes_of(w, "MiniMaxH3ImageConditioning")
-    assert "images.image_1" in ph3["inputs"]
-    # 256 selection + 64 px of context on each side: the model needs to see the surroundings.
-    # Then rendered at 4 MP (capped at 4x linear) - 384 * 4 = 1536.
-    assert ph3["inputs"]["width"] == 1536
-    assert ph3["inputs"]["height"] == 1536
-    assert class_types(w).count("ImageCrop") == 2  # context crop in, selection crop back out
-    # The patch goes back into the untouched image at the selection offset, so nothing else moves.
-    (composite,) = nodes_of(w, "ImageCompositeMasked")
-    assert composite["inputs"]["x"] == 128 and composite["inputs"]["y"] == 128
+    (cond,) = nodes_of(w, "MiniMaxH3ImageConditioning")
+    assert cond["inputs"]["width"] == 512 and cond["inputs"]["height"] == 512
 
-    # Compositing uses the mask the user drew, not the grown/feathered denoise mask, otherwise the
-    # invented pixels land outside the selection.
+    # The sampler must be fed by the masked latent, not by the conditioning's empty one.
+    (sampler,) = nodes_of(w, "SamplerCustomAdvanced")
+    latent_id = sampler["inputs"]["latent_image"][0]
+    assert w.root[latent_id]["class_type"] == "SetLatentNoiseMask"
+
+    # The result is pasted back through the selection, with a minimum feather for the 1/16 grid.
     (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
-    mask_node_id = apply["inputs"]["mask"][0]
-    chain = [w.root[mask_node_id]["class_type"]]
-    while node_inputs := [
-        v for v in w.root[mask_node_id]["inputs"].values() if isinstance(v, list)
+    assert w.root[apply["inputs"]["mask"][0]]["class_type"] == "INPAINT_ShrinkMask"
+
+
+def test_selection_keeps_the_grown_mask_out_of_the_paste():
+    """grow/feather belong to the denoise area; the paste uses the selection the user drew."""
+    models = client_models()
+    e = Extent(512, 512)
+    wf_input = workflow.WorkflowInput(
+        workflow.WorkflowKind.inpaint,
+        ImageInput(ExtentInput(e, e, e, e), Image.create(e), Image.create(e)),
+        models=CheckpointInput(CHECKPOINT, resources.Arch.h3),
+        sampling=sampling(),
+        conditioning=ConditioningInput("make it snowy", ""),
+        inpaint=InpaintParams(InpaintMode.custom, Bounds(128, 128, 256, 256), grow=64, feather=32),
+        crop_upscale_extent=e,
+    )
+    assert wf_input.images is not None
+    wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
+    w = workflow.create(wf_input, models)
+
+    (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
+    chain = []
+    node_id = apply["inputs"]["mask"][0]
+    chain.append(w.root[node_id]["class_type"])
+    while upstream := [
+        v for v in w.root[node_id]["inputs"].values() if isinstance(v, list)
     ]:
-        mask_node_id = node_inputs[0][0]
-        chain.append(w.root[mask_node_id]["class_type"])
-    assert "INPAINT_ExpandMask" not in chain
-    assert chain[0] == "ThresholdMask" and chain[1] == "CropMask"
-
-
-def test_edit_extent_is_an_exact_integer_multiple():
-    """The patch is pasted back by scaling the generated crop down again, so the upscale factor
-    has to be an exact integer. A continuous factor rounded to a multiple of 32 resamples x and y
-    by different amounts and the pasted patch drifts against the canvas."""
-    from ai_diffusion.backend.workflow import _h3_context_bounds, _h3_edit_extent
-
-    canvas = Extent(1024, 1024)
-    for side in (192, 256, 320, 384, 448, 512, 640, 896):
-        selection = Bounds(64, 64, side, side)
-        context = _h3_context_bounds(selection, canvas)
-        assert context.x % 32 == 0 and context.y % 32 == 0
-        assert context.width % 32 == 0 and context.height % 32 == 0
-
-        edit = _h3_edit_extent(context.extent)
-        (factor_x, rest_x) = divmod(edit.width, context.width)
-        (factor_y, rest_y) = divmod(edit.height, context.height)
-        assert rest_x == 0 and rest_y == 0, (side, context.extent, edit)
-        assert factor_x == factor_y, (side, context.extent, edit)
-        assert 1 <= factor_x <= 4
-        # the downscale back is exactly 1/factor on both axes: nothing left to drift
-        assert edit.width / context.width == edit.height / context.height
-
-    # A crop that is not a multiple of 32 is rendered 1:1 instead of being resampled by a
-    # fractional factor, which is what produced the misaligned paste.
-    assert _h3_edit_extent(Extent(1000, 900)) == Extent(1000, 900)
+        node_id = upstream[0][0]
+        chain.append(w.root[node_id]["class_type"])
+    assert "INPAINT_ExpandMask" not in chain  # grow/feather would paste invented pixels
 
 
 def test_region_layers_are_rejected():
@@ -564,9 +556,9 @@ def test_region_layers_are_rejected():
         workflow._h3_no_regions(cond)
 
 
-def test_refine_with_a_selection_is_treated_as_a_crop_edit():
+def test_refine_with_a_selection_uses_the_masked_latent():
+    """H3 cannot denoise a masked region in place, so a refine selection runs as a masked sample."""
     models = client_models()
-    w = ComfyWorkflow(node_defs=models.node_inputs)
     e = Extent(512, 512)
     wf_input = workflow.WorkflowInput(
         workflow.WorkflowKind.refine_region,
@@ -581,7 +573,8 @@ def test_refine_with_a_selection_is_treated_as_a_crop_edit():
     wf_input.images.hires_mask = Image.create(e)
     w = workflow.create(wf_input, models)
     types = class_types(w)
-    assert "ImageCrop" in types
+    assert "SetLatentNoiseMask" in types
+    assert "ImageCrop" not in types
     assert "MiniMaxH3ImageConditioning" in types
     assert "ETN_ApplyMaskToImage" in types
 
