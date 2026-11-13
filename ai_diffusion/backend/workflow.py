@@ -1460,10 +1460,6 @@ def inpaint_h3(
     in_image = scale_to_initial(extent, w, in_image, models)
     in_mask = w.load_mask(ensure(images.hires_mask))
     inpaint_mask = apply_grow_feather(w, in_mask, params)
-    # Apply blend to the generation mask itself (unified approach): erode + feather
-    # so the transition is built into the mask, without a separate compositing step.
-    if params.blend > 0:
-        inpaint_mask = w.shrink_mask(inpaint_mask, params.blend // 2, params.blend)
     inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
     inpaint_mask = w.stabilize_mask(inpaint_mask)
 
