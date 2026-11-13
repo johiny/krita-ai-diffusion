@@ -68,6 +68,13 @@ required_custom_nodes = [
 
 optional_custom_nodes = [
     CustomNode(
+        "MiniMax H3 Masked Latent",
+        "comfyui-h3-masked-latent",
+        "https://github.com/johiny/comfyui-h3-masked-latent",
+        "58f0d4e314b99db801946f909e0002397592e243",
+        ["H3LatentForModel"],
+    ),
+    CustomNode(
         "GGUF",
         "ComfyUI-GGUF",
         "https://github.com/city96/ComfyUI-GGUF",
