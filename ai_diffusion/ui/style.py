@@ -30,7 +30,7 @@ from ..files import File, FileFilter, FileFormat, FileSource
 from ..localization import translate as _
 from ..model.root import root
 from ..settings import ServerMode, Setting, settings
-from ..style import SamplerPresets, Style, Styles, StyleSettings, h3_sampler_preset
+from ..style import SamplerPresets, Style, Styles, StyleSettings, h3_sampler_preset, h3_image_sampler_preset
 from . import theme
 from .settings_widgets import (
     ComboBoxSetting,
@@ -1005,6 +1005,11 @@ class StylePresets(SettingsTab):
                 self._default_sampler.apply_preset(h3_sampler_preset)
             if style.live_sampler == StyleSettings.live_sampler.default:
                 self._live_sampler.apply_preset(h3_sampler_preset)
+        elif arch is Arch.h3_image:
+            if style.sampler == StyleSettings.sampler.default:
+                self._default_sampler.apply_preset(h3_image_sampler_preset)
+            if style.live_sampler == StyleSettings.live_sampler.default:
+                self._live_sampler.apply_preset(h3_image_sampler_preset)
         self._default_sampler.write(style)
         self._live_sampler.write(style)
         self._enable_checkpoint_advanced()

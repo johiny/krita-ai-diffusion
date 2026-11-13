@@ -118,3 +118,18 @@ same palette, the same clean background. Keep her design and her pose; change no
 | refine/edit, 1 reference | 22-45 s |
 | same, 24 steps | 32 s |
 | Qwen 2.1 edit, 20 steps, CFG 2.5 | 35-38 s |
+
+## Official MiniMax H3-Image (`minimax_h3_image_*`)
+
+The official native image model is a different family from P-H3: VAE `minimax_h3_image_vae_fp16`,
+TE Qwen3-VL 32B, nodes `MiniMaxH3ImageConditioning` / `H3ImageToImagePrepare`. Recipe: 6 steps,
+`euler` + `simple`, CFG 1, no negative prompt, up to 16 reference images.
+
+Prompt routing uses `<image_1>` .. `<image_16>` (note the underscore) instead of `<Picture N>`.
+The canvas is `<image_1>`; reference layers follow as `<image_2>` .. `<image_16>`. The edit
+guide for this model is: "Edit `<image_1>`, the image currently on the canvas. Apply exactly
+the changes the instruction asks for and leave the rest of `<image_1>` unchanged."
+
+The official model is faster (~27 s at 512² on a 3090) and supports ~16 MP natively. Do not mix
+components: the 8B TE with the official DiT raises
+`mat1 and mat2 shapes cannot be multiplied (…x4096 and 5120x5376)`.
