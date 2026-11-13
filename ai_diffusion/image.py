@@ -547,6 +547,25 @@ class Image:
         return cls._mask_op(lhs, rhs, QPainter.CompositionMode.CompositionMode_SourceOver)
 
     @staticmethod
+    def snap_mask_to_grid(image: Image, grid: int = 32):
+        """Round a mask to whole cells, the way MiniMax H3 consumes masks.
+
+        H3 reduces the mask to its 16x latent and keeps the maximum of every 2x2 patch, so a single
+        painted pixel switches on the whole 32x32 cell. Rounding the border to cell edges here makes
+        the regenerated area the one the user selected instead of up to a cell larger.
+        """
+        import numpy as np
+
+        data = image.to_array()[:, :, 0] >= 0.5
+        h, w = data.shape
+        cells = np.zeros((h, w), dtype=bool)
+        for y in range(0, h, grid):
+            for x in range(0, w, grid):
+                cells[y : y + grid, x : x + grid] = data[y : y + grid, x : x + grid].any()
+        packed = np.where(cells, 255, 0).astype(np.uint8).tobytes()
+        return Image.from_packed_bytes(QByteArray(packed), Extent(w, h), channels=1)
+
+    @staticmethod
     def compare(img_a: Image, img_b: Image):
         assert extent_equal(img_a._qimage, img_b._qimage)
         import numpy as np

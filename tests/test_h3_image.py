@@ -500,9 +500,15 @@ def test_selection_uses_a_masked_canvas_latent():
     latent_id = sampler["inputs"]["latent_image"][0]
     assert w.root[latent_id]["class_type"] == "SetLatentNoiseMask"
 
-    # The result is pasted back through the selection, with a minimum feather for the 1/16 grid.
+    # grow/feather are rounded to the cell grid, so the denoise area stays on cell edges
+    (expand,) = nodes_of(w, "INPAINT_ExpandMask")
+    assert expand["inputs"]["grow"] == 32 and expand["inputs"]["blur"] == 32
+
+    # The result is pasted back through the selection, feathered by one cell
     (apply,) = nodes_of(w, "ETN_ApplyMaskToImage")
+    (shrink,) = nodes_of(w, "INPAINT_ShrinkMask")
     assert w.root[apply["inputs"]["mask"][0]]["class_type"] == "INPAINT_ShrinkMask"
+    assert shrink["inputs"]["shrink"] == 0 and shrink["inputs"]["blur"] == 32
 
 
 def test_selection_keeps_the_grown_mask_out_of_the_paste():
@@ -811,3 +817,29 @@ def test_wrapper_is_skipped_when_the_server_does_not_have_it():
     wf_input.images.hires_mask = mask_with_rect(e, Bounds(128, 128, 256, 256))
     w = workflow.create(wf_input, models)
     assert "H3LatentForModel" not in class_types(w)
+
+def test_mask_is_snapped_to_the_h3_cell_grid():
+    """H3 keeps the maximum of every 2x2 latent patch, so a painted pixel switches on its whole
+    32x32 cell. The selection is rounded to that grid so the border is reproducible."""
+    e = Extent(512, 512)
+    mask = mask_with_rect(e, Bounds(131, 131, 253, 253))
+    snapped = Image.snap_mask_to_grid(mask)
+    data = snapped.to_array()[:, :, 0]
+
+    for y in range(0, 512, 32):
+        for x in range(0, 512, 32):
+            cell = data[y : y + 32, x : x + 32]
+            assert cell.min() == cell.max(), f"cell at {x},{y} is not uniform"
+
+    assert data[128:160, 128:160].all()  # the cell covering the selection corner is on
+    assert data[352:384, 352:384].all()  # ... and the last one it reaches
+    assert not data[96:128, 96:128].any()
+    assert not data[384:416, 384:416].any()
+
+
+def test_inpaint_params_round_grow_and_feather_to_the_grid():
+    base = InpaintParams(InpaintMode.custom, Bounds(0, 0, 512, 512), grow=8, feather=8)
+    rounded = base.on_grid(32)
+    assert (rounded.grow, rounded.feather) == (32, 32)
+    assert base.on_grid(32).grow == 32  # the caller's params are not modified
+    assert InpaintParams(InpaintMode.custom, Bounds(0, 0, 512, 512), grow=0, feather=0).on_grid(32)         == InpaintParams(InpaintMode.custom, Bounds(0, 0, 512, 512), grow=0, feather=0)
