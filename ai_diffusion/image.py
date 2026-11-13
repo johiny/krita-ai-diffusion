@@ -557,7 +557,7 @@ class Image:
         Pure-Qt implementation to avoid requiring numpy in Krita's embedded Python.
         Processes row-by-row for efficiency (reads each scanline once).
         """
-        from PyQt6.QtGui import QImage, QPainter
+        from PyQt6.QtGui import QImage, QPainter, QColor
 
         src = image._qimage
         if src.format() != QImage.Format.Format_Grayscale8:
@@ -599,7 +599,7 @@ class Image:
                     x0 = col * grid
                     x1 = min(x0 + grid, w)
                     painter = QPainter(dst)
-                    painter.fillRect(x0, y0, x1 - x0, y1 - y0, 255)
+                    painter.fillRect(x0, y0, x1 - x0, y1 - y0, QColor(255, 255, 255))
                     painter.end()
 
         return Image(dst)
