@@ -555,11 +555,7 @@ class ComfyWorkflow:
             "height": extent.height,
             "vae": vae,
         }
-        images = []
-        if image is not None:
-            images.append(image)
-        for reference in (references or []):
-            images.append(reference)
+        images = ([image] if image is not None else []) + list(references or [])
         for index, picture in enumerate(images, start=1):
             args[f"images.image_{index}"] = picture
         return self.add("MiniMaxH3ImageConditioning", 2, **args)
