@@ -99,7 +99,18 @@ w.send_image(out_image)
 4. **Small selections**: less 32px cells to regenerate = less drift
 5. **Blend**: ignore it in H3 (no effect)
 
+## Resolution (auto)
+
+H3 needs **at least 4 MP** to work well. Below 4 MP the output breaks down.
+The plugin now automatically upscales small canvases to 4 MP (2048×2048)
+and caps at 8 MP (max_pixel_count). No manual configuration needed.
+
+- Small canvas (1 MP) → auto-upscaled to 4 MP
+- Large canvas (16 MP) → auto-downscaled to 8 MP
+- Optimal: 4-8 MP for 24 GB VRAM (RTX 3090)
+
 ## Files changed
 
 - `ai_diffusion/backend/workflow.py` — `inpaint_h3()` function
+- `ai_diffusion/backend/resolution.py` — H3 minimum 4 MP auto-upscale
 - `tests/test_h3_image.py` — updated tests to match new behavior
