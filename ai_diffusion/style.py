@@ -92,7 +92,7 @@ class StyleSettings:
     )
 
     h3_target_resolution = Setting(
-        "H3 Target Resolution", 0, _("Target resolution in pixels for H3 (0 = auto, min 4MP)")
+        "H3 Target Resolution (MP)", 0, _("Target resolution in megapixels for H3 (0 = auto, min 4MP). E.g. 4 = 4MP, 8 = 8MP.")
     )
 
     linked_edit_style = Setting(

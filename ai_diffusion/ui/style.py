@@ -718,7 +718,7 @@ class StylePresets(SettingsTab):
         resolution_check.toggled.connect(self._toggle_preferred_resolution)
 
         self._h3_resolution_spin = self._style_widgets["h3_target_resolution"] = SpinBoxSetting(
-            StyleSettings.h3_target_resolution, self, 0, 4096, step=64
+            StyleSettings.h3_target_resolution, self, 0, 16, step=1
         )
         self._h3_resolution_spin.value_changed.connect(self.write)
         self._layout.addWidget(self._h3_resolution_spin)

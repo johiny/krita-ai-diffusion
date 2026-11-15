@@ -163,9 +163,11 @@ class CheckpointResolution(NamedTuple):
             # H3 needs at least 4 MP to work well (community recommendation).
             # Below 4 MP the output breaks down.
             if arch is Arch.h3:
-                h3_res = style.h3_target_resolution if style else 0
-                if h3_res > 0:
-                    default = (h3_res, h3_res, h3_res**2, h3_res**2)
+                h3_mp = style.h3_target_resolution if style else 0
+                if h3_mp > 0:
+                    h3_px = round(math.sqrt(h3_mp * 10**6))
+                    h3_px = (h3_px // 32) * 32  # round to 32px multiple
+                    default = (h3_px, h3_px, h3_px**2, h3_px**2)
                 else:
                     default = (2048, 2848, 4 * 10**6, 8 * 10**6)
             min_size, max_size, min_pixel_count, max_pixel_count = res.get(arch, default)
