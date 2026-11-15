@@ -5,7 +5,7 @@ from enum import Enum
 from typing import NamedTuple, overload
 
 from ..image import Bounds, Extent, Image, Point, multiple_of
-from ..settings import PerformanceSettings
+from ..settings import PerformanceSettings, settings
 from ..style import Style
 from .api import ExtentInput, ImageInput, WorkflowKind
 from .resources import Arch
@@ -163,7 +163,11 @@ class CheckpointResolution(NamedTuple):
             # H3 needs at least 4 MP to work well (community recommendation).
             # Below 4 MP the output breaks down.
             if arch is Arch.h3:
-                default = (2048, 2848, 4 * 10**6, 8 * 10**6)
+                h3_res = settings.h3_target_resolution
+                if h3_res > 0:
+                    default = (h3_res, h3_res, h3_res**2, h3_res**2)
+                else:
+                    default = (2048, 2848, 4 * 10**6, 8 * 10**6)
             min_size, max_size, min_pixel_count, max_pixel_count = res.get(arch, default)
         else:
             mult = diffusion_multiple(arch)
