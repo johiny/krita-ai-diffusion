@@ -160,6 +160,10 @@ class CheckpointResolution(NamedTuple):
             if inpaint:
                 # Inpaint models for Flux/Z-Image only work reliably around 1MP
                 default = (640, 1280, 512**2, 1024**2)
+            # H3 needs at least 4 MP to work well (community recommendation).
+            # Below 4 MP the output breaks down.
+            if arch is Arch.h3:
+                default = (2048, 2848, 4 * 10**6, 8 * 10**6)
             min_size, max_size, min_pixel_count, max_pixel_count = res.get(arch, default)
         else:
             mult = diffusion_multiple(arch)
