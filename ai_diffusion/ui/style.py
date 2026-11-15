@@ -722,7 +722,7 @@ class StylePresets(SettingsTab):
         )
         self._h3_resolution_spin.value_changed.connect(self.write)
         self._layout.addWidget(self._h3_resolution_spin)
-        self._h3_resolution_spin.setVisible(False)  # only for H3
+        self._h3_resolution_spin.setVisible(False)  # only for H3, and only when expanded
 
         self._zsnr = add(
             "v_prediction_zsnr", SwitchSetting(StyleSettings.v_prediction_zsnr, parent=self)
@@ -936,8 +936,14 @@ class StylePresets(SettingsTab):
             self._clip_skip.value = 0
 
     def _toggle_checkpoint_advanced(self, checked: bool):
+        self._checkpoint_advanced_expanded = checked
         for widget in self._checkpoint_advanced_widgets:
             widget.visible = checked
+        # H3 resolution spin: only visible when expanded AND H3
+        if hasattr(self, "_h3_resolution_spin"):
+            arch = resolve_arch(self.current_style, root.connection.client_if_connected)
+            is_h3 = arch in (Arch.h3, Arch.h3)
+            self._h3_resolution_spin.setVisible(checked and is_h3)
 
     def _show_builtin_info(self, style: Style):
         is_builtin = Styles.list().is_builtin(style)
@@ -976,7 +982,8 @@ class StylePresets(SettingsTab):
         self._clip_skip.enabled = arch.supports_clip_skip and self.current_style.clip_skip > 0
         self._zsnr.enabled = arch.supports_attention_guidance
         self._sag.enabled = arch.supports_attention_guidance
-        self._h3_resolution_spin.setVisible(is_h3)
+        expanded = getattr(self, "_checkpoint_advanced_expanded", False)
+        self._h3_resolution_spin.setVisible(expanded and is_h3)
 
     def _read_style(self, style: Style):
         with self._write_guard:
