@@ -91,6 +91,10 @@ class StyleSettings:
         _("Preferred Resolution"), 0, _("Image resolution the checkpoint was trained on")
     )
 
+    h3_target_resolution = Setting(
+        "H3 Target Resolution", 0, _("Target resolution in pixels for H3 (0 = auto, min 4MP)")
+    )
+
     linked_edit_style = Setting(
         _("Linked Edit Style"),
         "",
@@ -131,6 +135,7 @@ class Style(QObject):
     rescale_cfg: float = StyleSettings.rescale_cfg.default
     self_attention_guidance: bool = StyleSettings.self_attention_guidance.default
     preferred_resolution: int = StyleSettings.preferred_resolution.default
+    h3_target_resolution: int = StyleSettings.h3_target_resolution.default
     linked_edit_style: str = StyleSettings.linked_edit_style.default
     sampler: str = StyleSettings.sampler.default
     sampler_steps: int = StyleSettings.sampler_steps.default

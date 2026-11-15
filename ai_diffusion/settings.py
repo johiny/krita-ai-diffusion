@@ -443,12 +443,6 @@ class Settings(QObject):
         _("Maximum resolution to generate images at, in megapixels (FullHD ~ 2MP, 4k ~ 8MP)."),
     )
 
-    h3_target_resolution: int
-    _h3_target_resolution = Setting(
-        "H3 Target Resolution",
-        0,
-        _("Target resolution in pixels for H3 models (0 = auto, minimum 4MP). E.g. 2048 = 4MP, 2848 = 8MP."),
-    )
 
     dynamic_caching: bool
     _dynamic_caching = Setting(

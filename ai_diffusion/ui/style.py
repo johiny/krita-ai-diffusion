@@ -717,6 +717,13 @@ class StylePresets(SettingsTab):
         resolution_check = self._resolution_spin.add_checkbox(_("Override"))
         resolution_check.toggled.connect(self._toggle_preferred_resolution)
 
+        self._h3_resolution_spin = self._style_widgets["h3_target_resolution"] = SpinBoxSetting(
+            StyleSettings.h3_target_resolution, self, 0, 4096, step=64
+        )
+        self._h3_resolution_spin.value_changed.connect(self.write)
+        self._layout.addWidget(self._h3_resolution_spin)
+        self._h3_resolution_spin.setVisible(False)  # only for H3
+
         self._zsnr = add(
             "v_prediction_zsnr", SwitchSetting(StyleSettings.v_prediction_zsnr, parent=self)
         )
@@ -731,6 +738,7 @@ class StylePresets(SettingsTab):
             self._vae,
             self._clip_skip,
             self._resolution_spin,
+            self._h3_resolution_spin,
             self._zsnr,
             self._sag,
         ]
@@ -968,6 +976,7 @@ class StylePresets(SettingsTab):
         self._clip_skip.enabled = arch.supports_clip_skip and self.current_style.clip_skip > 0
         self._zsnr.enabled = arch.supports_attention_guidance
         self._sag.enabled = arch.supports_attention_guidance
+        self._h3_resolution_spin.setVisible(is_h3)
 
     def _read_style(self, style: Style):
         with self._write_guard:
