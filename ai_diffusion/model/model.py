@@ -799,7 +799,7 @@ class DocumentModel(QObject, ObservableProperties):
         if params.resize_canvas and self.document.extent != image.extent:
             self.document.resize_canvas(*image.extent)
 
-        bounds = Bounds(*params.bounds.offset, *image.extent)
+        bounds = Bounds(0, 0, *image.extent)
         if len(params.regions) == 0 or region_behavior is ApplyRegionBehavior.none:
             if behavior is ApplyBehavior.replace:
                 self.layers.update_layer_image(self.layers.active, image, bounds)
@@ -936,13 +936,19 @@ class DocumentModel(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
-        self.apply_result(
-            job.results[0],
-            job.params,
-            settings.apply_behavior,
-            settings.apply_region_behavior,
-            "[Upscale] ",
-        )
+        # Place the upscaled image at the selection position using move()
+        image = job.results[0]
+        x, y = job.params.bounds.offset
+        behavior = settings.apply_behavior
+        if behavior is ApplyBehavior.replace:
+            self.layers.update_layer_image(self.layers.active, image, Bounds(0, 0, *image.extent))
+            self.layers.active.node.move(x, y)
+        else:
+            name = f"[Upscale] {trim_text(job.params.name, 200)} ({job.params.seed})"
+            pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
+            layer = self.layers.create(name, image, Bounds(0, 0, *image.extent), above=pos)
+            layer.node.move(x, y)
+        self._layer = None
 
     def set_workspace(self, workspace: Workspace):
         if self.workspace is Workspace.live:
