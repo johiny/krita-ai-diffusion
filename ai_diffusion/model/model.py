@@ -464,7 +464,16 @@ class DocumentModel(QObject, ObservableProperties):
         self.upscale.set_in_progress(True)
         eventloop.run(_report_errors(self, self._enqueue_job(job, inputs)))
 
-        self._doc.resize(job.params.bounds.extent)
+        has_selection = bool(self._doc.selection_bounds)
+        if not has_selection:
+            try:
+                from ai_diffusion.model.region import SelectionModifiers
+                _mask, sb = self._doc.create_mask_from_selection(SelectionModifiers(multiple=1))
+                has_selection = sb is not None
+            except Exception:
+                pass
+        if not has_selection:
+            self._doc.resize(job.params.bounds.extent)
         self.upscale.target_extent_changed.emit(self.upscale.target_extent)
 
     def estimate_cost(self, kind=JobKind.diffusion):
