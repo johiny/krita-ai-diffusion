@@ -384,6 +384,14 @@ class DocumentModel(QObject, ObservableProperties):
 
         # Check for active selection
         selection_bounds = getattr(self._doc, "selection_bounds", None)
+        if selection_bounds is None:
+            try:
+                from ai_diffusion.model.region import SelectionModifiers
+                mask, selection_bounds = self._doc.create_mask_from_selection(
+                    SelectionModifiers(multiple=1)
+                )
+            except Exception:
+                selection_bounds = None
         if selection_bounds:
             extent = selection_bounds.extent
             image = self._doc.get_image(selection_bounds) if not dryrun else DummyImage(extent)
