@@ -388,10 +388,12 @@ class DocumentModel(QObject, ObservableProperties):
             extent = selection_bounds.extent
             image = self._doc.get_image(selection_bounds) if not dryrun else DummyImage(extent)
             bounds = selection_bounds
+            target_offset = (selection_bounds.x, selection_bounds.y)
         else:
             extent = self._doc.extent
             image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
             bounds = Bounds(0, 0, *self._doc.extent)
+            target_offset = (0, 0)
 
         sys_prompt = "4k uhd"
         if self.arch.is_edit:
@@ -433,7 +435,7 @@ class DocumentModel(QObject, ObservableProperties):
                 params.upscale.rtx_strength,
             )
 
-        target_bounds = Bounds(0, 0, *params.target_extent)
+        target_bounds = Bounds(*target_offset, *params.target_extent)
         name = f"{target_bounds.width}x{target_bounds.height}"
         job_params = JobParams(target_bounds, name, seed=params.seed, regions=job_regions)
         return input, job_params
