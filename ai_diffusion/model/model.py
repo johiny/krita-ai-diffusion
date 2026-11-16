@@ -382,26 +382,34 @@ class DocumentModel(QObject, ObservableProperties):
             self.report_error(Error(ErrorKind.warning, msg + f": {params.upscale.model}"))
             self.upscale.upscaler = params.upscale.model = client.models.default_upscaler
 
-        # Check for active selection
+        # Check for active selection (and keep its mask so the upscale integrates like inpaint)
+        # Reuse the same selection detection as the normal generation path.
+        selection_mask = None
         selection_bounds = getattr(self._doc, "selection_bounds", None)
-        if selection_bounds is None:
+        log.info(f"[UpscaleSel] prepare: selection_bounds={selection_bounds}")
+        if selection_bounds is not None:
             try:
-                from ai_diffusion.model.region import SelectionModifiers
-                mask, selection_bounds = self._doc.create_mask_from_selection(
+                selection_mask, _ = self._doc.create_mask_from_selection(
                     SelectionModifiers(multiple=1)
                 )
             except Exception:
-                selection_bounds = None
+                selection_mask = None
+
         if selection_bounds:
             extent = selection_bounds.extent
             image = self._doc.get_image(selection_bounds) if not dryrun else DummyImage(extent)
             bounds = selection_bounds
             target_offset = (selection_bounds.x, selection_bounds.y)
+            # Keep the mask aligned to the selection rectangle; scale it to the result later.
+            if selection_mask is not None:
+                rel = selection_bounds.relative_to(selection_mask.bounds)
+                selection_mask = Mask.crop(selection_mask, rel).to_image()
         else:
             extent = self._doc.extent
             image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
             bounds = Bounds(0, 0, *self._doc.extent)
             target_offset = (0, 0)
+            selection_mask = None
 
         sys_prompt = "4k uhd"
         if self.arch.is_edit:
@@ -450,6 +458,11 @@ class DocumentModel(QObject, ObservableProperties):
             target_bounds = Bounds(*target_offset, *params.target_extent)
         name = f"{target_bounds.width}x{target_bounds.height}"
         job_params = JobParams(target_bounds, name, seed=params.seed, regions=job_regions)
+        if selection_mask is not None:
+            job_params.selection_mask = selection_mask
+            job_params.selection_bounds = selection_bounds
+            log.info(f"[UpscaleSel] stored mask extent={selection_mask.extent} "
+                     f"target_bounds={target_bounds}")
         return input, job_params
 
     def upscale_image(self):
@@ -936,18 +949,36 @@ class DocumentModel(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
-        # Composite the upscaled selection onto the original canvas (like inpaint)
         image = job.results[0]
-        x, y = job.params.bounds.offset
-        canvas = self._doc.get_image()  # full canvas
-        canvas.draw_image(image, (x, y), blend=BlendMode.replace)
-        behavior = settings.apply_behavior
-        if behavior is ApplyBehavior.replace:
+
+        sel_mask = getattr(job.params, "selection_mask", None)
+        sel_bounds = getattr(job.params, "selection_bounds", None)
+        log.info(f"[UpscaleSel] apply: has_mask={sel_mask is not None} has_bounds={sel_bounds is not None} "
+                 f"result_extent={image.extent} bounds={sel_bounds}")
+        if sel_mask is not None and sel_bounds is not None:
+            # The upscaler returns the enlarged selection (selection_extent * factor).
+            # Shrink it back to the original selection size so it fits in place, then
+            # feather it with the selection mask and composite over the full canvas
+            # exactly like a normal inpaint result.
+            image = Image.scale(image, sel_bounds.extent)
+            mask = Image.scale(sel_mask, image.extent)
+            qimg = image._qimage.convertToFormat(image._qimage.Format.Format_ARGB32)
+            qimg.setAlphaChannel(mask._qimage)
+            image = Image(qimg)
+
+            x, y = sel_bounds.offset
+            canvas = self._doc.get_image()  # full canvas at original resolution
+            canvas.draw_image(image, (x, y), blend=BlendMode.alpha)
             self.layers.update_layer_image(self.layers.active, canvas, Bounds(0, 0, *canvas.extent))
         else:
-            name = f"[Upscale] {trim_text(job.params.name, 200)} ({job.params.seed})"
-            pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
-            self.layers.create(name, canvas, Bounds(0, 0, *canvas.extent), above=pos)
+            # No selection: normal full-image upscale (canvas was resized in upscale_image).
+            self.apply_result(
+                image,
+                job.params,
+                settings.apply_behavior,
+                settings.apply_region_behavior,
+                "[Upscale] ",
+            )
         self._layer = None
 
     def set_workspace(self, workspace: Workspace):
