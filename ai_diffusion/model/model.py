@@ -375,15 +375,24 @@ class DocumentModel(QObject, ObservableProperties):
 
     def _prepare_upscale_image(self, dryrun=False):
         client = self._connection.client
-        extent = self._doc.extent
-        image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
         params = self.upscale.params
         params.upscale.model = params.upscale.model or client.models.default_upscaler
         if params.upscale.model not in client.models.upscalers:
             msg = _("The upscale model used by the document is not available on the server")
             self.report_error(Error(ErrorKind.warning, msg + f": {params.upscale.model}"))
             self.upscale.upscaler = params.upscale.model = client.models.default_upscaler
-        bounds = Bounds(0, 0, *self._doc.extent)
+
+        # Check for active selection
+        selection_bounds = getattr(self._doc, "selection_bounds", None)
+        if selection_bounds:
+            extent = selection_bounds.extent
+            image = self._doc.get_image(selection_bounds) if not dryrun else DummyImage(extent)
+            bounds = selection_bounds
+        else:
+            extent = self._doc.extent
+            image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
+            bounds = Bounds(0, 0, *self._doc.extent)
+
         sys_prompt = "4k uhd"
         if self.arch.is_edit:
             sys_prompt = "Enhance image quality. Preserve original content."
@@ -1192,7 +1201,11 @@ class UpscaleWorkspace(QObject, ObservableProperties):
 
     @property
     def target_extent(self):
-        return ensure(self._model()).document.extent * self.factor
+        doc = ensure(self._model())._doc
+        base = getattr(doc, "selection_bounds", None)
+        if base:
+            return base.extent * self.factor
+        return doc.extent * self.factor
 
     @property
     def params(self):

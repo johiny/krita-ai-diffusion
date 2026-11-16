@@ -2005,17 +2005,8 @@ def prepare(
 
     elif kind is WorkflowKind.inpaint:
         assert isinstance(canvas, Image) and mask and inpaint and style
-        # Auto: if selection doesn't cover entire canvas, upscale only the selection
-        canvas_extent = canvas.extent
-        mask_bounds = mask.bounds
-        is_full_canvas = (
-            mask_bounds.x == 0 and mask_bounds.y == 0
-            and mask_bounds.width == canvas_extent.width
-            and mask_bounds.height == canvas_extent.height
-        )
-        force_orig = not is_full_canvas
         i.images, _ = resolution.prepare_image(
-            canvas, arch, style, perf, inpaint=inpaint.use_inpaint_model, force_original=force_orig
+            canvas, arch, style, perf, inpaint=inpaint.use_inpaint_model
         )
         i.images.hires_mask = mask.to_image(canvas.extent)
         upscale_extent, _ = resolution.prepare_extent(
