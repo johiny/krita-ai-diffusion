@@ -198,10 +198,17 @@ def prepare_diffusion_input(
     perf: PerformanceSettings,
     downscale=True,
     inpaint=False,
+    force_original=False,
 ):
+    mult = diffusion_multiple(arch)
+    if force_original:
+        # Keep original resolution, don't scale canvas
+        input = initial = desired = extent.multiple_of(mult)
+        batch = compute_batch_size(extent, 512, perf.batch_size)
+        return ScaledExtent(input, initial, desired, extent), image, batch
+
     # Take settings into account to compute the desired resolution for diffusion.
     desired = apply_resolution_settings(extent, perf)
-    mult = diffusion_multiple(arch)
 
     # The checkpoint may require a different resolution than what is requested.
     if arch.is_edit:
@@ -244,17 +251,17 @@ def prepare_diffusion_input(
 
 
 def prepare_extent(
-    extent: Extent, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True
+    extent: Extent, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True, force_original=False
 ):
-    scaled, _, batch = prepare_diffusion_input(extent, None, arch, style, perf, downscale)
+    scaled, _, batch = prepare_diffusion_input(extent, None, arch, style, perf, downscale, force_original=force_original)
     return ImageInput(scaled.as_input), batch
 
 
 def prepare_image(
-    image: Image, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True, inpaint=False
+    image: Image, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True, inpaint=False, force_original=False
 ):
     scaled, out_image, batch = prepare_diffusion_input(
-        image.extent, image, arch, style, perf, downscale, inpaint
+        image.extent, image, arch, style, perf, downscale, inpaint, force_original=force_original
     )
     assert out_image is not None
     return ImageInput(scaled.as_input, out_image), batch
