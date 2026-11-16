@@ -936,18 +936,18 @@ class DocumentModel(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
-        # Place the upscaled image at the selection position using move()
+        # Composite the upscaled selection onto the original canvas (like inpaint)
         image = job.results[0]
         x, y = job.params.bounds.offset
+        canvas = self._doc.get_image()  # full canvas
+        canvas.draw_image(image, (x, y), blend=BlendMode.replace)
         behavior = settings.apply_behavior
         if behavior is ApplyBehavior.replace:
-            self.layers.update_layer_image(self.layers.active, image, Bounds(0, 0, *image.extent))
-            self.layers.active.node.move(x, y)
+            self.layers.update_layer_image(self.layers.active, canvas, Bounds(0, 0, *canvas.extent))
         else:
             name = f"[Upscale] {trim_text(job.params.name, 200)} ({job.params.seed})"
             pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
-            layer = self.layers.create(name, image, Bounds(0, 0, *image.extent), above=pos)
-            layer.node.move(x, y)
+            self.layers.create(name, canvas, Bounds(0, 0, *canvas.extent), above=pos)
         self._layer = None
 
     def set_workspace(self, workspace: Workspace):
