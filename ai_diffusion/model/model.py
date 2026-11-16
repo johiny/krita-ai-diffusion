@@ -443,10 +443,10 @@ class DocumentModel(QObject, ObservableProperties):
                 params.upscale.rtx_strength,
             )
 
-        target_bounds = Bounds(*target_offset, *params.target_extent)
-        # Override target_extent if selection is active
+        # Override target bounds if selection is active
         if selection_bounds:
-            params.target_extent = selection_bounds.extent * params.factor
+            target_bounds = Bounds(*target_offset, *selection_bounds.extent * params.factor)
+        else:
             target_bounds = Bounds(*target_offset, *params.target_extent)
         name = f"{target_bounds.width}x{target_bounds.height}"
         job_params = JobParams(target_bounds, name, seed=params.seed, regions=job_regions)
