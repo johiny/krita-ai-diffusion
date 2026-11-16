@@ -91,10 +91,6 @@ class StyleSettings:
         _("Preferred Resolution"), 0, _("Image resolution the checkpoint was trained on")
     )
 
-    upscale_selection_only = Setting(
-        "Upscale Selection Only", False, _("Upscale only the selected region, not the entire image")
-    )
-
     h3_target_resolution = Setting(
         "H3 Target Resolution (MP)", 0, _("Target resolution in megapixels for H3 (0 = auto, min 4MP). E.g. 4 = 4MP, 8 = 8MP.")
     )
@@ -139,7 +135,6 @@ class Style(QObject):
     rescale_cfg: float = StyleSettings.rescale_cfg.default
     self_attention_guidance: bool = StyleSettings.self_attention_guidance.default
     preferred_resolution: int = StyleSettings.preferred_resolution.default
-    upscale_selection_only: bool = StyleSettings.upscale_selection_only.default
     h3_target_resolution: int = StyleSettings.h3_target_resolution.default
     linked_edit_style: str = StyleSettings.linked_edit_style.default
     sampler: str = StyleSettings.sampler.default

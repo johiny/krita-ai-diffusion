@@ -717,12 +717,6 @@ class StylePresets(SettingsTab):
         resolution_check = self._resolution_spin.add_checkbox(_("Override"))
         resolution_check.toggled.connect(self._toggle_preferred_resolution)
 
-        self._upscale_selection_check = self._style_widgets["upscale_selection_only"] = SwitchSetting(
-            StyleSettings.upscale_selection_only, parent=self
-        )
-        self._upscale_selection_check.value_changed.connect(self.write)
-        self._layout.addWidget(self._upscale_selection_check)
-
         self._h3_resolution_spin = self._style_widgets["h3_target_resolution"] = SpinBoxSetting(
             StyleSettings.h3_target_resolution, self, 0, 20, step=1
         )
@@ -744,7 +738,6 @@ class StylePresets(SettingsTab):
             self._vae,
             self._clip_skip,
             self._resolution_spin,
-            self._upscale_selection_check,
             self._h3_resolution_spin,
             self._zsnr,
             self._sag,
