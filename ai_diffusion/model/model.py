@@ -812,7 +812,7 @@ class DocumentModel(QObject, ObservableProperties):
         if params.resize_canvas and self.document.extent != image.extent:
             self.document.resize_canvas(*image.extent)
 
-        bounds = Bounds(0, 0, *image.extent)
+        bounds = Bounds(*params.bounds.offset, *image.extent)
         if len(params.regions) == 0 or region_behavior is ApplyRegionBehavior.none:
             if behavior is ApplyBehavior.replace:
                 self.layers.update_layer_image(self.layers.active, image, bounds)
