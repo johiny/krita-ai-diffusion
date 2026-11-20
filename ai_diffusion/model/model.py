@@ -386,7 +386,6 @@ class DocumentModel(QObject, ObservableProperties):
         # Reuse the same selection detection as the normal generation path.
         selection_mask = None
         selection_bounds = getattr(self._doc, "selection_bounds", None)
-        log.info(f"[UpscaleSel] prepare: selection_bounds={selection_bounds}")
         if selection_bounds is not None:
             try:
                 selection_mask, _ = self._doc.create_mask_from_selection(
@@ -461,8 +460,6 @@ class DocumentModel(QObject, ObservableProperties):
         if selection_mask is not None:
             job_params.selection_mask = selection_mask
             job_params.selection_bounds = selection_bounds
-            log.info(f"[UpscaleSel] stored mask extent={selection_mask.extent} "
-                     f"target_bounds={target_bounds}")
         return input, job_params
 
     def upscale_image(self):
@@ -953,8 +950,6 @@ class DocumentModel(QObject, ObservableProperties):
 
         sel_mask = getattr(job.params, "selection_mask", None)
         sel_bounds = getattr(job.params, "selection_bounds", None)
-        log.info(f"[UpscaleSel] apply: has_mask={sel_mask is not None} has_bounds={sel_bounds is not None} "
-                 f"result_extent={image.extent} bounds={sel_bounds}")
         if sel_mask is not None and sel_bounds is not None:
             # The upscaler returns the enlarged selection (selection_extent * factor).
             # Shrink it back to the original selection size so it fits in place, then
