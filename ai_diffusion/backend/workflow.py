@@ -767,8 +767,17 @@ def apply_anima_references(
     if adapter is None:
         return model  # the control layer reports the missing adapter
     clip_output = clip.model if isinstance(clip, Clip) else clip
-    images = [control.image.load(w) for control in reference_layers]
-    weights = [control.strength for control in reference_layers]
+    # The node turns the weight into a log bias, so it drops weight-0 pictures before encoding
+    # them. Do the same here, and skip the node when there is nothing left to read.
+    references = [
+        (control.image.load(w), control.strength)
+        for control in reference_layers
+        if control.strength > 0
+    ]
+    if not references:
+        return model
+    images = [image for image, _ in references]
+    weights = [weight for _, weight in references]
     if len(images) > 3:
         # The node reads three pictures; pack the rest side by side, the way the author feeds a
         # multi-view reference. A packed picture carries one weight, so the per-layer one is lost.

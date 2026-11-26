@@ -6,6 +6,8 @@ control layer on an Anima checkpoint has to wrap the model instead of the condit
 
 import json
 
+import pytest
+
 from ai_diffusion.backend import resources, workflow
 from ai_diffusion.backend.api import ControlInput
 from ai_diffusion.backend.client import CheckpointInfo, ClientModels, ModelDict
@@ -91,9 +93,9 @@ def test_reference_layer_wraps_the_model_with_snapref():
     (key, node), *rest = nodes_of(w, "SnapRef")
     assert not rest
     assert node["inputs"]["adapter"] == ADAPTER
-    assert node["inputs"]["weight_1"] == 1.0
+    assert node["inputs"]["weight_1"] == pytest.approx(1.0)
     assert node["inputs"]["mode"] == "cs"
-    (_, checkpoint) = nodes_of(w, "CheckpointLoaderSimple")[0]
+    (_, _checkpoint) = nodes_of(w, "CheckpointLoaderSimple")[0]
     assert node["inputs"]["clip"] == [checkpoint_key(w, "CheckpointLoaderSimple"), 1]
     assert str(model.node) == key, "the sampler must read the SnapRef output"
 
@@ -106,7 +108,7 @@ def test_reference_image_comes_from_the_control_layer():
     w, _ = build([ADAPTER], count=1)
 
     (_, snapref), *rest = nodes_of(w, "SnapRef")
-    (_, load_image), *other = nodes_of(w, "ETN_LoadImageCache")
+    (_, _load_image), *other = nodes_of(w, "ETN_LoadImageCache")
     assert not rest and not other
     assert snapref["inputs"]["image"] == [checkpoint_key(w, "ETN_LoadImageCache"), 0]
 
@@ -115,7 +117,7 @@ def test_layer_strength_maps_to_the_linear_weight():
     w, _ = build([ADAPTER], count=1, strength=0.5)
 
     (_, snapref) = nodes_of(w, "SnapRef")[0]
-    assert snapref["inputs"]["weight_1"] == 0.5
+    assert snapref["inputs"]["weight_1"] == pytest.approx(0.5)
 
 
 def test_several_reference_layers_share_one_node():
@@ -148,8 +150,45 @@ def test_each_reference_keeps_its_own_weight():
     assert_serializable(w)
 
     (_, node) = nodes_of(w, "SnapRef")[0]
-    assert node["inputs"]["weight_1"] == 1.0
-    assert node["inputs"]["weight_2"] == 0.4
+    assert node["inputs"]["weight_1"] == pytest.approx(1.0)
+    assert node["inputs"]["weight_2"] == pytest.approx(0.4)
+
+
+def _reference_layers(weights):
+    models = make_models([ADAPTER])
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
+    layers = [
+        workflow.Control.from_input(
+            ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), weight)
+        )
+        for weight in weights
+    ]
+    return w, models, model, clip, vae, layers
+
+
+def test_a_reference_with_zero_strength_is_left_out():
+    w, models, model, clip, vae, layers = _reference_layers((1.0, 0.0))
+
+    model = workflow.apply_anima_references(
+        w, model, layers, workflow.Clip(clip, Arch.anima), vae, models
+    )
+    assert_serializable(w)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert "image_2" not in node["inputs"], "a zero weight would make the log bias -inf"
+    assert len(nodes_of(w, "ETN_LoadImageCache")) == 1
+
+
+def test_no_reference_node_when_every_layer_is_muted():
+    w, models, model, clip, vae, layers = _reference_layers((0.0, 0.0))
+
+    result = workflow.apply_anima_references(
+        w, model, layers, workflow.Clip(clip, Arch.anima), vae, models
+    )
+
+    assert not nodes_of(w, "SnapRef")
+    assert str(result.node) == str(model.node)
 
 
 def test_three_references_fill_every_slot():
@@ -157,7 +196,7 @@ def test_three_references_fill_every_slot():
 
     (_, node) = nodes_of(w, "SnapRef")[0]
     assert "image_3" in node["inputs"]
-    assert node["inputs"]["weight_3"] == 1.0
+    assert node["inputs"]["weight_3"] == pytest.approx(1.0)
     assert not nodes_of(w, "ImageStitch")
 
 
@@ -170,7 +209,7 @@ def test_four_references_are_packed_into_one_picture():
     assert node["inputs"]["image"] == [stitches[-1][0], 0]
     assert "image_2" not in node["inputs"]
     assert "image_3" not in node["inputs"]
-    assert node["inputs"]["weight_1"] == 1.0
+    assert node["inputs"]["weight_1"] == pytest.approx(1.0)
     for key, stitch in stitches:
         assert stitch["inputs"]["match_image_size"] is True
         for name in ("image1", "image2"):
@@ -269,7 +308,6 @@ def test_generate_graph_is_serializable_with_a_reference_layer():
     from ai_diffusion.backend.api import (
         CheckpointInput,
         ConditioningInput,
-        ExtentInput,
         SamplingInput,
     )
     from ai_diffusion.backend.resolution import ScaledExtent
@@ -289,11 +327,12 @@ def test_generate_graph_is_serializable_with_a_reference_layer():
 
     sampling = SamplingInput("euler", "normal", 4.0, 20, 0, 1234)
     cond = workflow.Conditioning.from_input(ConditioningInput("a cat", ""), sampling)
-    cond.control.append(
-        workflow.Control.from_input(
-            ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), 1.0)
+    for weight in (1.0, 0.5):
+        cond.control.append(
+            workflow.Control.from_input(
+                ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), weight)
+            )
         )
-    )
 
     w = ComfyWorkflow(node_defs=models.node_inputs)
     w = workflow.generate(
@@ -307,5 +346,7 @@ def test_generate_graph_is_serializable_with_a_reference_layer():
     )
 
     assert_serializable(w)
-    (_, snapref) = nodes_of(w, "SnapRef")[0]
+    (_, snapref), *rest = nodes_of(w, "SnapRef")
+    assert not rest, "a second reference layer must not add a second node"
     assert isinstance(snapref["inputs"]["clip"], list), "clip must be a node link, not a Clip"
+    assert snapref["inputs"]["weight_2"] == pytest.approx(0.5)

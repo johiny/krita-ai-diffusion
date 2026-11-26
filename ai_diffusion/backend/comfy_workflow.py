@@ -967,18 +967,18 @@ class ComfyWorkflow:
         """
         assert images, "SnapRef needs at least one reference"
         weights = list(weights or [1.0] * len(images))
-        inputs: dict[str, Any] = dict(
-            model=model,
-            clip=clip,
-            vae=vae,
-            image=images[0],
-            adapter=adapter,
-            mode=mode,
-            ref_in_uncond=False,
-            ref_megapixels=1.0,
-            weight_1=weights[0],
-            fidelity=1.0,
-        )
+        inputs: dict[str, Any] = {
+            "model": model,
+            "clip": clip,
+            "vae": vae,
+            "image": images[0],
+            "adapter": adapter,
+            "mode": mode,
+            "ref_in_uncond": False,
+            "ref_megapixels": 1.0,
+            "weight_1": weights[0],
+            "fidelity": 1.0,
+        }
         if len(images) > 1:
             inputs["image_2"] = images[1]
             inputs["weight_2"] = weights[1]

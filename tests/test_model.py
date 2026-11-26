@@ -362,7 +362,7 @@ async def test_control_layer_keeps_the_reference_mode(workflows_dir: Path):
     """Property setters emit <name>_changed, so the field needs a declared signal."""
     krita_doc = Krita.instance().openDocument("test")
 
-    async with _model_env(krita_doc, workflows_dir) as (model, client):
+    async with _model_env(krita_doc, workflows_dir) as (model, _client):
         ctrl = model.regions.control.emplace()
         assert ctrl is not None
 
@@ -380,7 +380,7 @@ async def test_control_layer_keeps_the_reference_mode(workflows_dir: Path):
 async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
     krita_doc = Krita.instance().openDocument("test")
 
-    async with _model_env(krita_doc, workflows_dir) as (model, client):
+    async with _model_env(krita_doc, workflows_dir) as (model, _client):
         first = model.regions.control.emplace()
         second = model.regions.control.emplace()
         assert first is not None and second is not None
