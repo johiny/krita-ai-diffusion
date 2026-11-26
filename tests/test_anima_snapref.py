@@ -171,6 +171,12 @@ def test_four_references_are_packed_into_one_picture():
     assert "image_2" not in node["inputs"]
     assert "image_3" not in node["inputs"]
     assert node["inputs"]["weight_1"] == 1.0
+    for key, stitch in stitches:
+        assert stitch["inputs"]["match_image_size"] is True
+        for name in ("image1", "image2"):
+            link = stitch["inputs"][name]
+            assert isinstance(link, list) and len(link) == 2, (key, name, link)
+            assert link[0] in w.root, (key, name, link)
 
 
 def test_the_default_adapter_is_the_one_that_reads_style():

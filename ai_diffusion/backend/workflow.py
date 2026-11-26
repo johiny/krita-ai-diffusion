@@ -772,10 +772,7 @@ def apply_anima_references(
     if len(images) > 3:
         # The node reads three pictures; pack the rest side by side, the way the author feeds a
         # multi-view reference. A packed picture carries one weight, so the per-layer one is lost.
-        packed = images[0]
-        for image in images[1:]:
-            packed = w.image_stitch(packed, image)
-        images, weights = [packed], [1.0]
+        images, weights = [w.image_stitch(images, match_image_size=True)], [1.0]
     return w.apply_snapref(
         model,
         clip_output,

@@ -987,19 +987,6 @@ class ComfyWorkflow:
             inputs["weight_3"] = weights[2]
         return self.add("SnapRef", 1, **inputs)
 
-    def image_stitch(self, image1: Output, image2: Output):
-        """Side by side at the same height, the way SnapRef packs several views into one picture."""
-        return self.add(
-            "ImageStitch",
-            1,
-            image1=image1,
-            image2=image2,
-            direction="right",
-            match_image_size=True,
-            spacing_width=0,
-            spacing_color="white",
-        )
-
     def apply_ip_adapter_face(
         self,
         model: Output,
@@ -1177,7 +1164,7 @@ class ComfyWorkflow:
     def image_batch_element(self, batch: Output, index: int):
         return self.add("ImageFromBatch", 1, image=batch, batch_index=index, length=1)
 
-    def image_stitch(self, images: list[Output], direction="right"):
+    def image_stitch(self, images: list[Output], direction="right", match_image_size=False):
         if len(images) == 1:
             return images[0]
         result = images[0]
@@ -1188,7 +1175,7 @@ class ComfyWorkflow:
                 image1=result,
                 image2=i,
                 direction=direction,
-                match_image_size=False,
+                match_image_size=match_image_size,
                 spacing_width=0,
                 spacing_color="white",
             )
