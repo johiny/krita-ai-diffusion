@@ -960,13 +960,10 @@ class ComfyWorkflow:
         adapter: str,
         weights: list[float] | None = None,
         mode: str = "cs",
-        layout: str = "separate",
     ):
         """Reference adapter for Anima: keeps the reference K/V of every block for the sampler.
 
         The node reads up to three pictures of the same character, each with its own weight.
-        "stitch" packs them side by side into one picture instead, which is how two different
-        characters share a generation (the weights do not apply then).
         """
         assert images, "SnapRef needs at least one reference"
         weights = list(weights or [1.0] * len(images))
@@ -979,7 +976,6 @@ class ComfyWorkflow:
             "mode": mode,
             "ref_in_uncond": False,
             "ref_megapixels": 1.0,
-            "multi_layout": layout,
             "weight_1": weights[0],
             "fidelity": 1.0,
         }

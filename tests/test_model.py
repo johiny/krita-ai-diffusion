@@ -395,9 +395,6 @@ async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
         assert first.ref_mode == "style", "one mode covers every reference layer"
         assert not first._has_conflicting_reference_mode()
 
-        second.ref_layout = "stitch"
-        assert first.ref_layout == "stitch", "the layout covers every reference layer"
-
         # A document saved with two modes must still be caught before generating.
         first._ref_mode = "cs"
         assert first._has_conflicting_reference_mode()

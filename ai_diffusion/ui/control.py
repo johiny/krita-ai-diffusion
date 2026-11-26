@@ -172,15 +172,6 @@ class ControlWidget(QWidget):
             _("What the reference provides: the character, the art style, or both")
         )
         self._update_ref_modes()
-        self.ref_layout_label = QLabel(_("References") + ":", self.extended_widget)
-        self.ref_layout_select = QComboBox(self.extended_widget)
-        self.ref_layout_select.setStyleSheet(theme.flat_combo_stylesheet)
-        self.ref_layout_select.addItem(_("Separate views"), "separate")
-        self.ref_layout_select.addItem(_("Side by side"), "stitch")
-        self.ref_layout_select.setToolTip(
-            _("Separate: every picture is a view of one character, each with its own strength. "
-              "Side by side: one packed picture, for different characters")
-        )
         self.range_slider = IntervalSlider(
             low=0, high=20, minimum=0, maximum=20, parent=self.extended_widget
         )
@@ -199,8 +190,6 @@ class ControlWidget(QWidget):
         slider_layout.addWidget(self.range_end_label, 1, 3)
         slider_layout.addWidget(self.ref_mode_label, 2, 0)
         slider_layout.addWidget(self.ref_mode_select, 2, 2, 1, 2)
-        slider_layout.addWidget(self.ref_layout_label, 3, 0)
-        slider_layout.addWidget(self.ref_layout_select, 3, 2, 1, 2)
         extended_layout.addLayout(slider_layout)
 
         self._update_visibility()
@@ -216,7 +205,6 @@ class ControlWidget(QWidget):
             bind(control, "preset_value", self.preset_slider, "value"),
             bind(control, "strength", self.strength_slider, "value"),
             bind_combo(control, "ref_mode", self.ref_mode_select),
-            bind_combo(control, "ref_layout", self.ref_layout_select),
             control.use_custom_strength_changed.connect(self._update_custom_values),
             control.strength_changed.connect(self._update_strength),
             control.start_changed.connect(self._update_range),
@@ -317,12 +305,7 @@ class ControlWidget(QWidget):
             self.range_slider.setVisible(self._control.has_range)
             self.range_start_label.setVisible(self._control.has_range)
             self.range_end_label.setVisible(self._control.has_range)
-            for widget in (
-                self.ref_mode_label,
-                self.ref_mode_select,
-                self.ref_layout_label,
-                self.ref_layout_select,
-            ):
+            for widget in (self.ref_mode_label, self.ref_mode_select):
                 # Unsupported layers keep the mode combo: a mode mismatch is what marks them
                 # unsupported, so hiding it would leave no way to fix the layer.
                 widget.setVisible(is_anima_ref)
