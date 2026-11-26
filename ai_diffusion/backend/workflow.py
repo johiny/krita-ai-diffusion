@@ -749,7 +749,7 @@ def apply_anima_references(
     w: ComfyWorkflow,
     model: Output,
     control_layers: list[Control],
-    clip: Output,
+    clip: Clip | Output,
     vae: Output,
     models: ModelDict,
     adapter: str | None = None,
@@ -766,11 +766,12 @@ def apply_anima_references(
     adapter = adapter or find_snapref_adapter(models.all.loras)
     if adapter is None:
         return model  # the control layer reports the missing adapter
+    clip_output = clip.model if isinstance(clip, Clip) else clip
     for control in reference_layers:
         image = control.image.load(w)
         model = w.apply_snapref(
             model,
-            clip,
+            clip_output,
             vae,
             image,
             control.ref_adapter or adapter,

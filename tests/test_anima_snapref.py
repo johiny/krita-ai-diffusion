@@ -4,9 +4,11 @@ SnapRef keeps the reference K/V of every attention block for the sampler, so a r
 control layer on an Anima checkpoint has to wrap the model instead of the conditioning.
 """
 
+import json
+
 from ai_diffusion.backend import resources, workflow
 from ai_diffusion.backend.api import ControlInput
-from ai_diffusion.backend.client import ClientModels, ModelDict
+from ai_diffusion.backend.client import CheckpointInfo, ClientModels, ModelDict
 from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo, ComfyWorkflow
 from ai_diffusion.backend.resources import Arch, ControlMode, ResourceKind
 from ai_diffusion.image import Extent, Image
@@ -55,10 +57,17 @@ def build(loras: list[str], count: int, arch: Arch = Arch.anima, strength: float
     models = make_models(loras, arch)
     w = ComfyWorkflow(node_defs=models.node_inputs)
     model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
+    # The real builder hands over the Clip wrapper, which carries the arch with it.
     model = workflow.apply_anima_references(
-        w, model, reference_layers(count, strength), clip, vae, models
+        w, model, reference_layers(count, strength), workflow.Clip(clip, arch), vae, models
     )
+    assert_serializable(w)
     return w, model
+
+
+def assert_serializable(w: ComfyWorkflow):
+    """The prompt is posted as JSON, so no node input may hold a non-serializable object."""
+    json.dumps(w.root)
 
 
 def nodes_of(w: ComfyWorkflow, class_type: str):
@@ -128,7 +137,10 @@ def test_explicit_adapter_and_mode_override_the_defaults():
         )
     )
 
-    model = workflow.apply_anima_references(w, model, [layer], clip, vae, models)
+    model = workflow.apply_anima_references(
+        w, model, [layer], workflow.Clip(clip, Arch.anima), vae, models
+    )
+    assert_serializable(w)
 
     (_, snapref) = nodes_of(w, "SnapRef")[0]
     assert snapref["inputs"]["adapter"] == STYLE_ADAPTER
@@ -161,3 +173,48 @@ def test_adapter_detection_ignores_unrelated_loras():
     assert resources.find_snapref_adapter([]) is None
     assert resources.find_snapref_adapter([ADAPTER]) == ADAPTER
     assert resources.find_snapref_adapter([STYLE_ADAPTER]) == STYLE_ADAPTER
+
+
+def test_generate_graph_is_serializable_with_a_reference_layer():
+    """Full builder path: the prompt is posted as JSON, so the Clip wrapper must not leak."""
+    from ai_diffusion.backend.api import (
+        CheckpointInput,
+        ConditioningInput,
+        ExtentInput,
+        SamplingInput,
+    )
+    from ai_diffusion.backend.resolution import ScaledExtent
+    from ai_diffusion.files import FileFormat
+
+    client_models = ClientModels()
+    client_models.checkpoints = {
+        ANIMA: CheckpointInfo(ANIMA, Arch.anima, FileFormat.diffusion)
+    }
+    client_models.resources = {
+        resources.resource_id(ResourceKind.text_encoder, Arch.anima, "qwen_3_06b"): "te.safetensors",
+        resources.resource_id(ResourceKind.vae, Arch.anima, "default"): "vae.safetensors",
+    }
+    client_models.loras = [ADAPTER]
+    client_models.node_inputs = node_defs()
+    models = ModelDict(client_models, ResourceKind.checkpoint, Arch.anima)
+
+    sampling = SamplingInput("euler", "normal", 4.0, 20, 0, 1234)
+    cond = workflow.Conditioning.from_input(ConditioningInput("a cat", ""), sampling)
+    cond.control.append(workflow.Control.from_input(ControlInput(
+        ControlMode.reference, Image.create(Extent(64, 64)), 1.0, (0.0, 1.0), ADAPTER, "cs"
+    )))
+
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    w = workflow.generate(
+        w,
+        CheckpointInput(ANIMA, Arch.anima),
+        ScaledExtent.no_scaling(Extent(512, 512)),
+        cond,
+        sampling,
+        workflow.MiscParams(1, 1, 0.0, 0.0),
+        models,
+    )
+
+    assert_serializable(w)
+    (_, snapref) = nodes_of(w, "SnapRef")[0]
+    assert isinstance(snapref["inputs"]["clip"], list), "clip must be a node link, not a Clip"
