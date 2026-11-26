@@ -165,7 +165,7 @@ class ControlWidget(QWidget):
         self.strength_label = QLabel("1.0", self.extended_widget)
 
         self.range_label = QLabel(_("Range") + ":", self.extended_widget)
-        self.ref_mode_label = QLabel(_("Reference") + ":", self.extended_widget)
+        self.ref_mode_label = QLabel(_("Reference type") + ":", self.extended_widget)
         self.ref_mode_select = QComboBox(self.extended_widget)
         self.ref_mode_select.setStyleSheet(theme.flat_combo_stylesheet)
         self.ref_mode_select.setToolTip(

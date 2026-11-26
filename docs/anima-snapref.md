@@ -60,8 +60,11 @@ Not supported, by design of the node:
   with a strength each, but its references are files in the ComfyUI input folder, not images from the
   graph.
 
-Two characters are one reference, as the author does it: `ImageStitch` side by side plus `2girls`
-and the left/right position in the prompt. Horizontal pictures score better.
+Two different characters need the node's `multi_layout="stitch"`: the pictures are packed into one
+reference and the prompt asks for `2girls`. The plugin keeps the node's default (`separate`),
+because in practice the packed pair still hands the same appearance to both girls: the node has a
+single reference role, so nothing tells the model which half belongs to whom. Separating two
+identities needs two passes, not two references.
 
 ## Recommended settings
 
