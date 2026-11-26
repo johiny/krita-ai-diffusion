@@ -276,6 +276,167 @@ async def test_generate_inpaint(workflows_dir: Path):
         assert float(mask_arr.max()) > 0.99, "hires_mask should have fully-selected pixels"
 
 
+def _paint_with_selection(krita_doc: MockKritaDocument):
+    """Fill the canvas with a solid colour and select a 256×256 square in the centre."""
+    bg_bgra = bytes([200, 0, 0, 255]) * 512 * 512  # BGRA: B=200 G=0 R=0 A=255
+    krita_doc.rootNode().childNodes()[0].setPixelData(QByteArray(bg_bgra), 0, 0, 512, 512)
+    sel = Selection()
+    sel.setPixelData(QByteArray(bytes([0xFF] * 256 * 256)), 128, 128, 256, 256)
+    krita_doc.setSelection(sel)
+
+
+@qtapp
+async def test_h3_selection_warns_when_masked_latent_is_missing(workflows_dir: Path):
+    """H3 selection edits seed the sampler with a real latent, which only the video/audio
+    checkpoints choke on. Without the optional node the job would die inside the sampler, so the
+    model must name the missing package instead."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        assert "H3LatentForModel" not in client.models.node_inputs
+        model.generate()
+        await _wait_for_enqueue(client)
+
+        assert model.error.kind is ErrorKind.warning
+        assert "MiniMax H3 Masked Latent" in model.error.message
+        assert "comfyui-h3-masked-latent" in model.error.message
+
+
+@qtapp
+async def test_h3_selection_is_quiet_when_masked_latent_is_installed(workflows_dir: Path):
+    """With the node installed there is nothing to warn about."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        client.models.node_inputs.nodes["H3LatentForModel"] = {"input": {"required": {}}}
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        model.generate()
+        await _wait_for_enqueue(client)
+
+        assert model.error.kind is not ErrorKind.warning
+
+
+@qtapp
+async def test_h3_warning_only_fires_once_per_session(workflows_dir: Path):
+    """Two selection edits without the node must not stack two identical warnings."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        model.generate()
+        await _wait_for_enqueue(client)
+        first = model.error.message
+        model.clear_error()
+        model.generate()
+        await _wait_for_enqueue(client, count=2)
+
+        assert model.error.kind is not ErrorKind.warning, "warning repeated on the second edit"
+        assert model._h3_edit_node_warned
+        assert "MiniMax H3 Masked Latent" in first
+
+
+@qtapp
+async def test_control_layer_keeps_the_reference_mode(workflows_dir: Path):
+    """Property setters emit <name>_changed, so the field needs a declared signal."""
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, _client):
+        ctrl = model.regions.control.emplace()
+        assert ctrl is not None
+
+        seen: list[str] = []
+        ctrl.ref_mode_changed.connect(seen.append)
+        ctrl.mode = ControlMode.reference
+        ctrl.ref_mode = "style"
+
+        assert seen == ["style"]
+        assert ctrl.ref_mode == "style"
+        await asyncio.sleep(0)  # let the mock connection settle before disconnecting
+
+
+@qtapp
+async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, _client):
+        first = model.regions.control.emplace()
+        second = model.regions.control.emplace()
+        assert first is not None and second is not None
+
+        for layer in (first, second):
+            layer.mode = ControlMode.reference
+            layer.ref_mode = "cs"
+        assert not first._has_conflicting_reference_mode()
+        assert not second._has_conflicting_reference_mode()
+
+        second.ref_mode = "style"
+        assert first.ref_mode == "style", "one mode covers every reference layer"
+        assert not first._has_conflicting_reference_mode()
+
+        # A document saved with two modes must still be caught before generating.
+        first._ref_mode = "cs"
+        assert first._has_conflicting_reference_mode()
+        assert second._has_conflicting_reference_mode()
+        first.ref_mode = "style"
+
+        assert first._reference_layer_index() == 0
+        assert second._reference_layer_index() == 1
+        second.strength = 0
+        assert first._reference_layer_index() == 0, "a muted layer never reaches the node"
+        await asyncio.sleep(0)
+
+
+@qtapp
+async def test_more_than_three_references_need_the_stitch_node(workflows_dir: Path):
+    """SnapRef reads three pictures; the rest are packed with a ComfyUI node, so check it exists."""
+    from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
+
+    anima = "anima-base-v1.0.safetensors"
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints[anima] = CheckpointInfo(anima, Arch.anima)
+        client.models.node_inputs = ComfyObjectInfo({})
+        client.models.loras = ["snapref_v2s_pre1_fp8.safetensors"]
+        model.style = _make_style(anima)
+
+        for _ in range(3):
+            layer = model.regions.control.emplace()
+            assert layer is not None
+            layer.mode = ControlMode.reference
+        assert all(layer.is_supported for layer in model.regions.control)
+
+        fourth = model.regions.control.emplace()
+        assert fourth is not None
+        fourth.mode = ControlMode.reference
+        assert not fourth.is_supported
+        assert "past the third" in fourth.error_text
+        assert all(layer.is_supported for layer in model.regions.control[:3])
+        await asyncio.sleep(0)
+
+
 @qtapp
 async def test_generate_batch(workflows_dir: Path):
     """With batch_count=8 and a wildcard prompt, DocumentModel.generate should enqueue 8 separate jobs.

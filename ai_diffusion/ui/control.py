@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..backend.resources import ControlMode
+from ..backend.resources import Arch, ControlMode, find_snapref_adapter
 from ..localization import translate as _
 from ..model.control import ControlLayer, ControlLayerList
 from ..model.properties import Binding, bind, bind_combo, bind_toggle
@@ -165,6 +165,13 @@ class ControlWidget(QWidget):
         self.strength_label = QLabel("1.0", self.extended_widget)
 
         self.range_label = QLabel(_("Range") + ":", self.extended_widget)
+        self.ref_mode_label = QLabel(_("Reference type") + ":", self.extended_widget)
+        self.ref_mode_select = QComboBox(self.extended_widget)
+        self.ref_mode_select.setStyleSheet(theme.flat_combo_stylesheet)
+        self.ref_mode_select.setToolTip(
+            _("What the reference provides: the character, the art style, or both")
+        )
+        self._update_ref_modes()
         self.range_slider = IntervalSlider(
             low=0, high=20, minimum=0, maximum=20, parent=self.extended_widget
         )
@@ -181,6 +188,8 @@ class ControlWidget(QWidget):
         slider_layout.addWidget(self.range_start_label, 1, 1)
         slider_layout.addWidget(self.range_slider, 1, 2)
         slider_layout.addWidget(self.range_end_label, 1, 3)
+        slider_layout.addWidget(self.ref_mode_label, 2, 0)
+        slider_layout.addWidget(self.ref_mode_select, 2, 2, 1, 2)
         extended_layout.addLayout(slider_layout)
 
         self._update_visibility()
@@ -195,6 +204,7 @@ class ControlWidget(QWidget):
             bind_toggle(control, "use_custom_strength", self.custom_checkbox),
             bind(control, "preset_value", self.preset_slider, "value"),
             bind(control, "strength", self.strength_slider, "value"),
+            bind_combo(control, "ref_mode", self.ref_mode_select),
             control.use_custom_strength_changed.connect(self._update_custom_values),
             control.strength_changed.connect(self._update_strength),
             control.start_changed.connect(self._update_range),
@@ -237,11 +247,45 @@ class ControlWidget(QWidget):
     def _add_pose_character(self):
         root.active_model.document.add_pose_character(self._control.layer)
 
+    def _update_ref_modes(self):
+        control = self._control
+        combo = self.ref_mode_select
+        client = root.connection.client_if_connected
+        loras = (
+            [name for name in client.models.loras if "snapref" in name.lower()] if client else []
+        )
+        adapters = client.models.snapref_adapters if client else {}
+        # The layer does not pick an adapter: use the newest one, which reads the most modes.
+        adapter = find_snapref_adapter(loras, adapters)
+        modes = adapters.get(adapter or "", [])  # empty: the adapter did not say
+        items = (
+            ("cs", _("Character & Style")),
+            ("char", _("Character")),
+            ("style", _("Style")),
+        )
+        available = [value for value, _text in items if not modes or value in modes]
+        if [combo.itemData(i) for i in range(combo.count())] != available:
+            combo.blockSignals(True)
+            combo.clear()
+            for value, text in items:
+                if value in available:
+                    combo.addItem(text, value)
+            combo.blockSignals(False)
+        values = [combo.itemData(i) for i in range(combo.count())]
+        if control.ref_mode in values:
+            combo.setCurrentIndex(values.index(control.ref_mode))
+        elif values:
+            control.ref_mode = values[0]
+
     def _update_visibility(self):
+        self._update_ref_modes()
         is_small = self.width() < 420
         is_pose = self._control.mode is ControlMode.pose
         is_segmentation = self._control.mode is ControlMode.segmentation
         is_edit = root.active_model.arch.supports_edit
+        is_anima_ref = self._control.mode is ControlMode.reference and (
+            root.active_model.arch is Arch.anima
+        )
 
         def controls():
             self.layer_select.setVisible(self._control.is_supported)
@@ -261,6 +305,10 @@ class ControlWidget(QWidget):
             self.range_slider.setVisible(self._control.has_range)
             self.range_start_label.setVisible(self._control.has_range)
             self.range_end_label.setVisible(self._control.has_range)
+            for widget in (self.ref_mode_label, self.ref_mode_select):
+                # Unsupported layers keep the mode combo: a mode mismatch is what marks them
+                # unsupported, so hiding it would leave no way to fix the layer.
+                widget.setVisible(is_anima_ref)
             if not self._control.is_supported or is_edit:
                 self.expand_button.setChecked(False)
 

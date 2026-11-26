@@ -60,7 +60,17 @@ required_custom_nodes = [
     ),
 ]
 
+# Optional: seeds a real latent so a MiniMax H3 selection edit has something to preserve.
+h3_masked_latent = CustomNode(
+    "MiniMax H3 Masked Latent",
+    "comfyui-h3-masked-latent",
+    "https://github.com/johiny/comfyui-h3-masked-latent",
+    "58f0d4e314b99db801946f909e0002397592e243",
+    ["H3LatentForModel"],
+)
+
 optional_custom_nodes = [
+    h3_masked_latent,
     CustomNode(
         "GGUF",
         "ComfyUI-GGUF",
@@ -725,6 +735,43 @@ def verify_model_integrity(base_dir: Path | None = None):
         if model.file_id not in verified:
             yield from model.verify(base_dir)
             verified.add(model.file_id)
+
+
+def find_snapref_adapter(
+    loras: list[str], adapters: dict[str, list[str]] | None = None
+) -> str | None:
+    """Name of the SnapRef adapter to use, without asking the user.
+
+    Each generation is a superset of the one before, so prefer the adapter that reads the most
+    modes: style support first, then the wider mode list, then the latest name on the server.
+    """
+    candidates = [name for name in loras if "snapref" in name.lower()]
+    if not candidates:
+        return None
+    if adapters:
+
+        def rank(name: str):
+            modes = adapters.get(name) or []
+            return (1 if "style" in modes else 0, len(modes), name)
+
+        return max(candidates, key=rank)
+    return max(candidates)
+
+
+def snapref_mode_supported(
+    adapters: dict[str, list[str]], adapter: str, mode: str
+) -> bool:
+    """Whether the adapter can read the reference that way.
+
+    Adapters that do not report their modes must not be blocked: only a known list that lacks
+    the mode is a reason to refuse.
+    """
+    modes = adapters.get(adapter)
+    return not modes or mode in modes
+
+
+SNAPREF_REFERENCES = 3
+"""Pictures the SnapRef node reads, each one with its own weight."""
 
 
 def search_path(kind: ResourceKind, arch: Arch, identifier: ControlMode | UpscalerName | str):

@@ -10,7 +10,15 @@ from PyQt6.QtGui import QColor
 from .. import util
 from ..backend import resources
 from ..backend.api import ControlInput
-from ..backend.resources import Arch, ControlMode, ResourceKind, resource_id
+from ..backend.resources import (
+    SNAPREF_REFERENCES,
+    Arch,
+    ControlMode,
+    ResourceKind,
+    find_snapref_adapter,
+    resource_id,
+    snapref_mode_supported,
+)
 from ..image import BlendMode, Bounds, Extent, Image
 from ..layer import Layer, LayerType
 from ..localization import translate as _
@@ -35,6 +43,7 @@ class ControlLayer(QObject, ObservableProperties):
     start = Property(0.0, persist=True)
     end = Property(1.0, persist=True)
     use_custom_strength = Property(False, persist=True, setter="set_use_custom_strength")
+    ref_mode = Property("cs", persist=True)
     is_supported = Property(True)
     is_pose_vector = Property(False)
     can_generate = Property(True)
@@ -49,6 +58,7 @@ class ControlLayer(QObject, ObservableProperties):
     start_changed = pyqtSignal(float)
     end_changed = pyqtSignal(float)
     use_custom_strength_changed = pyqtSignal(bool)
+    ref_mode_changed = pyqtSignal(str)
     is_supported_changed = pyqtSignal(bool)
     is_pose_vector_changed = pyqtSignal(bool)
     can_generate_changed = pyqtSignal(bool)
@@ -69,6 +79,7 @@ class ControlLayer(QObject, ObservableProperties):
         self._update_is_supported()
 
         self.mode_changed.connect(self._update_is_supported)
+        self.ref_mode_changed.connect(self._update_is_supported)
         model.style_changed.connect(self._update_is_supported)
         model.edit_mode_changed.connect(self._update_is_supported)
         root.connection.state_changed.connect(self._update_is_supported)
@@ -135,7 +146,9 @@ class ControlLayer(QObject, ObservableProperties):
         if self.mode.is_lines or self.mode is ControlMode.stencil:
             image.make_opaque(background=Qt.GlobalColor.white)
 
-        if self.mode.is_ip_adapter:
+        if self.mode.is_ip_adapter and self._model.arch is Arch.anima:
+            pass  # SnapRef reads the reference at its own resolution, keep the layer pixels
+        elif self.mode.is_ip_adapter:
             if self._model.arch.supports_edit:
                 if image.extent.height > extent.height:
                     w = (image.extent.width * extent.height) // image.extent.height
@@ -144,7 +157,9 @@ class ControlLayer(QObject, ObservableProperties):
                 image = Image.scale(image, self.clip_vision_extent)
 
         strength = self.strength / self.strength_multiplier
-        return ControlInput(self.mode, image, strength, (self.start, self.end))
+        return ControlInput(
+            self.mode, image, strength, (self.start, self.end), self.ref_mode
+        )
 
     def generate_segmentation(self):
         assert self.mode is ControlMode.segmentation
@@ -200,6 +215,35 @@ class ControlLayer(QObject, ObservableProperties):
         self._generate_job = self._model.generate_control_layer(self)
         self.has_active_job = True
 
+    def refresh_support(self):
+        self._update_is_supported()
+
+    def _reference_layer_index(self) -> int:
+        """Position of this layer among the ones that reach the node; muted layers do not count."""
+        try:
+            siblings = list(self._model.regions.control)
+        except Exception:
+            return 0
+        active = [
+            other
+            for other in siblings
+            if other.mode is ControlMode.reference and other.strength > 0
+        ]
+        return active.index(self) if self in active else 0
+
+    def _has_conflicting_reference_mode(self):
+        """SnapRef reads one way per generation, so all reference layers have to agree."""
+        try:
+            siblings = self._model.regions.control
+        except Exception:
+            return False
+        return any(
+            other is not self
+            and other.mode is ControlMode.reference
+            and other.ref_mode != self.ref_mode
+            for other in siblings
+        )
+
     def _update_is_supported(self):
         from .root import root
 
@@ -217,7 +261,32 @@ class ControlLayer(QObject, ObservableProperties):
                     self.error_text = _("The server is missing the ClipVision model") + f" {search}"
                     is_supported = False
 
-            if self.mode.is_ip_adapter and models.arch.supports_edit:
+            if self.mode is ControlMode.reference and models.arch is Arch.anima:
+                available = [name for name in client.models.loras if "snapref" in name.lower()]
+                adapters = client.models.snapref_adapters
+                chosen = find_snapref_adapter(available, adapters)
+                is_supported = chosen is not None
+                if chosen is None:
+                    self.error_text = _(
+                        "The server is missing the SnapRef adapter for Anima references"
+                    )
+                elif not snapref_mode_supported(adapters, chosen, self.ref_mode):
+                    self.error_text = (
+                        _("The SnapRef adapter cannot read the reference this way")
+                        + f": {chosen}"
+                    )
+                    is_supported = False
+                elif self._has_conflicting_reference_mode():
+                    self.error_text = _("Reference layers must all use the same Reference mode")
+                    is_supported = False
+                elif self._reference_layer_index() >= SNAPREF_REFERENCES:
+                    self.error_text = _(
+                        "SnapRef reads three references and this layer is past the third"
+                    )
+                    is_supported = False
+                else:
+                    self.error_text = ""
+            elif self.mode.is_ip_adapter and models.arch.supports_edit:
                 is_supported = True  # Reference images are merged into the conditioning context
             elif self.mode.is_ip_adapter and models.ip_adapter.find(self.mode) is None:
                 search_path = resources.search_path(ResourceKind.ip_adapter, models.arch, self.mode)
@@ -296,7 +365,12 @@ class ControlLayerList(QObject):
         mode = ControlMode.reference if self._model.arch.is_edit else self._last_mode
         control = ControlLayer(self._model, mode, layer.id, len(self._layers))
         control.mode_changed.connect(self._update_last_mode)
+        control.ref_mode_changed.connect(self._refresh_support)
+        control.ref_mode_changed.connect(
+            lambda mode, source=control: self._sync_ref_mode(source, mode)
+        )
         self._layers.append(control)
+        self._refresh_support()
         self.added.emit(control)
 
     def emplace(self):
@@ -309,11 +383,24 @@ class ControlLayerList(QObject):
 
         for i, c in enumerate(self._layers):
             c.index = i
+        self._refresh_support()
 
     def to_api(self, bounds: Bounds | None = None, time: int | None = None):
         for layer in (c for c in self._layers if not c.is_supported):
             log.warning(f"Trying to use control layer {layer.mode.name}: {layer.error_text}")
         return [c.to_api(bounds, time) for c in self._layers if c.is_supported]
+
+    def _sync_ref_mode(self, source: ControlLayer, mode: str):
+        """The node reads every reference the same way, so one mode covers the whole generation."""
+        for layer in self._layers:
+            if layer is not source and layer.mode is ControlMode.reference:
+                if layer.ref_mode != mode:
+                    layer.ref_mode = mode
+
+    def _refresh_support(self):
+        """Reference layers share one reading mode, so changing it re-checks all of them."""
+        for layer in self._layers:
+            layer.refresh_support()
 
     def _update_last_mode(self, mode: ControlMode):
         self._last_mode = mode

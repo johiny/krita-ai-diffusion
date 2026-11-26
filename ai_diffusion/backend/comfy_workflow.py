@@ -899,6 +899,42 @@ class ComfyWorkflow:
             attn_mask=mask,
         )
 
+    def apply_snapref(
+        self,
+        model: Output,
+        clip: Output,
+        vae: Output,
+        images: list[Output],
+        adapter: str,
+        weights: list[float] | None = None,
+        mode: str = "cs",
+    ):
+        """Reference adapter for Anima: keeps the reference K/V of every block for the sampler.
+
+        The node reads up to three pictures of the same character, each with its own weight.
+        """
+        assert images, "SnapRef needs at least one reference"
+        weights = list(weights or [1.0] * len(images))
+        inputs: dict[str, Any] = {
+            "model": model,
+            "clip": clip,
+            "vae": vae,
+            "image": images[0],
+            "adapter": adapter,
+            "mode": mode,
+            "ref_in_uncond": False,
+            "ref_megapixels": 1.0,
+            "weight_1": weights[0],
+            "fidelity": 1.0,
+        }
+        if len(images) > 1:
+            inputs["image_2"] = images[1]
+            inputs["weight_2"] = weights[1]
+        if len(images) > 2:
+            inputs["image_3"] = images[2]
+            inputs["weight_3"] = weights[2]
+        return self.add("SnapRef", 1, **inputs)
+
     def apply_ip_adapter_face(
         self,
         model: Output,
@@ -1055,7 +1091,7 @@ class ComfyWorkflow:
     def image_batch_element(self, batch: Output, index: int):
         return self.add("ImageFromBatch", 1, image=batch, batch_index=index, length=1)
 
-    def image_stitch(self, images: list[Output], direction="right"):
+    def image_stitch(self, images: list[Output], direction="right", match_image_size=False):
         if len(images) == 1:
             return images[0]
         result = images[0]
@@ -1066,7 +1102,7 @@ class ComfyWorkflow:
                 image1=result,
                 image2=i,
                 direction=direction,
-                match_image_size=False,
+                match_image_size=match_image_size,
                 spacing_width=0,
                 spacing_color="white",
             )
