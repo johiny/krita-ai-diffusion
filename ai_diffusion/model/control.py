@@ -51,6 +51,8 @@ class ControlLayer(QObject, ObservableProperties):
     start_changed = pyqtSignal(float)
     end_changed = pyqtSignal(float)
     use_custom_strength_changed = pyqtSignal(bool)
+    ref_adapter_changed = pyqtSignal(str)
+    ref_mode_changed = pyqtSignal(str)
     is_supported_changed = pyqtSignal(bool)
     is_pose_vector_changed = pyqtSignal(bool)
     can_generate_changed = pyqtSignal(bool)

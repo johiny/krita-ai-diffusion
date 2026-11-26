@@ -358,6 +358,27 @@ async def test_h3_warning_only_fires_once_per_session(workflows_dir: Path):
 
 
 @qtapp
+async def test_control_layer_exposes_snapref_settings(workflows_dir: Path):
+    """Property setters emit <name>_changed, so the fields need a declared signal."""
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        ctrl = model.regions.control.emplace()
+        assert ctrl is not None
+
+        seen: list[str] = []
+        ctrl.ref_adapter_changed.connect(seen.append)
+        ctrl.mode = ControlMode.reference
+        ctrl.ref_adapter = "snapref_v2a_fp8.safetensors"
+        ctrl.ref_mode = "style"
+
+        assert seen == ["snapref_v2a_fp8.safetensors"]
+        assert ctrl.ref_adapter == "snapref_v2a_fp8.safetensors"
+        assert ctrl.ref_mode == "style"
+        await asyncio.sleep(0)  # let the mock connection settle before disconnecting
+
+
+@qtapp
 async def test_generate_batch(workflows_dir: Path):
     """With batch_count=8 and a wildcard prompt, DocumentModel.generate should enqueue 8 separate jobs.
     Each job re-evaluates the wildcard with a different seed, so both options must appear."""
