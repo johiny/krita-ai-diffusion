@@ -306,7 +306,9 @@ class ControlWidget(QWidget):
             self.range_start_label.setVisible(self._control.has_range)
             self.range_end_label.setVisible(self._control.has_range)
             for widget in (self.ref_mode_label, self.ref_mode_select):
-                widget.setVisible(is_anima_ref and self._control.is_supported)
+                # Unsupported layers keep the mode combo: a mode mismatch is what marks them
+                # unsupported, so hiding it would leave no way to fix the layer.
+                widget.setVisible(is_anima_ref)
             if not self._control.is_supported or is_edit:
                 self.expand_button.setChecked(False)
 

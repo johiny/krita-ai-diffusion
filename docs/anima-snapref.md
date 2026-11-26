@@ -48,8 +48,9 @@ Each `Reference` control layer contributes one picture with its own strength:
 - **Strength 0** removes a layer from the graph entirely, like the node does.
 
 All references of a generation share one role: their K/V are concatenated at the same RoPE frame, so
-the model cannot tell "this is the character, that is the style". Reference layers must therefore
-agree on the mode, and mixing modes blocks generation with a message.
+the model cannot tell "this is the character, that is the style". The mode is therefore a setting of
+the generation, not of the layer: changing it on one reference layer applies it to the others, and a
+document that still holds two different modes is blocked with a message before generating.
 
 Not supported, by design of the node:
 

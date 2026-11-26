@@ -368,6 +368,9 @@ class ControlLayerList(QObject):
         control = ControlLayer(self._model, mode, layer.id, len(self._layers))
         control.mode_changed.connect(self._update_last_mode)
         control.ref_mode_changed.connect(self._refresh_support)
+        control.ref_mode_changed.connect(
+            lambda mode, source=control: self._sync_ref_mode(source, mode)
+        )
         self._layers.append(control)
         self._refresh_support()
         self.added.emit(control)
@@ -388,6 +391,13 @@ class ControlLayerList(QObject):
         for layer in (c for c in self._layers if not c.is_supported):
             log.warning(f"Trying to use control layer {layer.mode.name}: {layer.error_text}")
         return [c.to_api(bounds, time) for c in self._layers if c.is_supported]
+
+    def _sync_ref_mode(self, source: ControlLayer, mode: str):
+        """The node reads every reference the same way, so one mode covers the whole generation."""
+        for layer in self._layers:
+            if layer is not source and layer.mode is ControlMode.reference:
+                if layer.ref_mode != mode:
+                    layer.ref_mode = mode
 
     def _refresh_support(self):
         """Reference layers share one reading mode, so changing it re-checks all of them."""
