@@ -43,7 +43,7 @@ from ..backend.client import (
 )
 from ..backend.network import NetworkError
 from ..backend.resolution import compute_bounds, compute_relative_bounds
-from ..backend.resources import ControlMode
+from ..backend.resources import ControlMode, h3_masked_latent
 from ..document import Document, KritaDocument, SelectionModifiers
 from ..files import FileLibrary
 from ..image import BlendMode, Bounds, DummyImage, Extent, Image, Mask
@@ -179,6 +179,7 @@ class DocumentModel(QObject, ObservableProperties):
         self.animation = AnimationWorkspace(self)
         self.custom = CustomWorkspace(workflows, self._generate_custom, self.jobs)
         self._style_connection: QMetaObject.Connection | None = None
+        self._h3_edit_node_warned = False
 
         self.jobs.selection_changed.connect(self.update_preview)
         connection.state_changed.connect(self._init_on_connect)
@@ -225,10 +226,31 @@ class DocumentModel(QObject, ObservableProperties):
             self.report_error(util.log_error(e))
             return
         self.clear_error()
+        if self.arch is Arch.h3 and input.kind in (
+            WorkflowKind.inpaint,
+            WorkflowKind.refine_region,
+        ):
+            self._warn_if_h3_edit_node_missing()
         jobs = self.enqueue_jobs(
             input, JobKind.diffusion, job_params, cond_orig, self.batch_count, queue_mode
         )
         eventloop.run(_report_errors(self, jobs))
+
+    def _warn_if_h3_edit_node_missing(self):
+        """H3 selection edits seed the sampler with a real latent instead of an empty one.
+
+        The one-frame image checkpoints take the plain ``VAEEncode`` tensor, but the audio/video
+        finetunes read a second stream out of the latent and fail inside the sampler. The
+        ``comfyui-h3-masked-latent`` node wraps the latent for them, so name the missing package
+        instead of letting the job die with an opaque server error.
+        """
+        client = self._connection.client
+        package = h3_masked_latent
+        if package.nodes[0] in client.models.node_inputs or self._h3_edit_node_warned:
+            return
+        self._h3_edit_node_warned = True
+        msg = _("The server is missing the custom node package for MiniMax H3 selection edits")
+        self.report_error(Error(ErrorKind.warning, msg + f": {package.name} ({package.url})"))
 
     def _prepare_workflow(self, dryrun=False):
         arch = self.arch

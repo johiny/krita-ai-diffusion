@@ -47,6 +47,7 @@ class MockClient(Client):
 
     def __init__(self):
         self.models = ClientModels()
+        self._models = self.models  # Client.__init__ keeps this reference; mirror it for ModelDict
         self.device_info = DeviceInfo("cpu", "Mock GPU", 8)
         self._features = ClientFeatures()
         self._performance = PerformanceSettings()
