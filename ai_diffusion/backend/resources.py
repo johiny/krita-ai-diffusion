@@ -765,19 +765,22 @@ def verify_model_integrity(base_dir: Path | None = None):
 def find_snapref_adapter(
     loras: list[str], adapters: dict[str, list[str]] | None = None
 ) -> str | None:
-    """Name of the SnapRef adapter to use when a layer does not name one.
+    """Name of the SnapRef adapter to use, without asking the user.
 
-    An adapter reports which modes it can read. Prefer one that also reads the art style, so
-    switching the reference mode later never needs an adapter swap.
+    Each generation is a superset of the one before, so prefer the adapter that reads the most
+    modes: style support first, then the wider mode list, then the latest name on the server.
     """
     candidates = [name for name in loras if "snapref" in name.lower()]
     if not candidates:
         return None
     if adapters:
-        style_capable = [name for name in candidates if "style" in adapters.get(name, [])]
-        if style_capable:
-            return style_capable[0]
-    return candidates[0]
+
+        def rank(name: str):
+            modes = adapters.get(name) or []
+            return (1 if "style" in modes else 0, len(modes), name)
+
+        return max(candidates, key=rank)
+    return max(candidates)
 
 
 def snapref_mode_supported(

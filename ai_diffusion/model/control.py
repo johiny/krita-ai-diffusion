@@ -42,7 +42,6 @@ class ControlLayer(QObject, ObservableProperties):
     start = Property(0.0, persist=True)
     end = Property(1.0, persist=True)
     use_custom_strength = Property(False, persist=True, setter="set_use_custom_strength")
-    ref_adapter = Property("", persist=True)
     ref_mode = Property("cs", persist=True)
     is_supported = Property(True)
     is_pose_vector = Property(False)
@@ -58,7 +57,6 @@ class ControlLayer(QObject, ObservableProperties):
     start_changed = pyqtSignal(float)
     end_changed = pyqtSignal(float)
     use_custom_strength_changed = pyqtSignal(bool)
-    ref_adapter_changed = pyqtSignal(str)
     ref_mode_changed = pyqtSignal(str)
     is_supported_changed = pyqtSignal(bool)
     is_pose_vector_changed = pyqtSignal(bool)
@@ -158,7 +156,7 @@ class ControlLayer(QObject, ObservableProperties):
 
         strength = self.strength / self.strength_multiplier
         return ControlInput(
-            self.mode, image, strength, (self.start, self.end), self.ref_adapter, self.ref_mode
+            self.mode, image, strength, (self.start, self.end), self.ref_mode
         )
 
     def generate_segmentation(self):
@@ -235,7 +233,7 @@ class ControlLayer(QObject, ObservableProperties):
             if self.mode is ControlMode.reference and models.arch is Arch.anima:
                 available = [name for name in client.models.loras if "snapref" in name.lower()]
                 adapters = client.models.snapref_adapters
-                chosen = self.ref_adapter or find_snapref_adapter(available, adapters)
+                chosen = find_snapref_adapter(available, adapters)
                 is_supported = chosen is not None
                 if chosen is None:
                     self.error_text = _(

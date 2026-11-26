@@ -92,8 +92,7 @@ class ControlInput:
     image: Image | None = None
     strength: float = 1.0
     range: tuple[float, float] = (0.0, 1.0)
-    # Anima references: which SnapRef adapter to use and how the reference is read
-    ref_adapter: str = ""
+    # Anima references: what the reference provides ("cs", "char" or "style")
     ref_mode: str = "cs"
 
 

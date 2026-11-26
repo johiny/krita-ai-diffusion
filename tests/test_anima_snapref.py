@@ -134,14 +134,14 @@ def test_the_default_adapter_is_the_one_that_reads_style():
     assert snapref["inputs"]["adapter"] == STYLE_ADAPTER
 
 
-def test_without_adapter_metadata_the_first_one_is_used():
+def test_without_adapter_metadata_the_latest_name_is_used():
     w, _ = build([ADAPTER, STYLE_ADAPTER], count=1)
 
     (_, snapref) = nodes_of(w, "SnapRef")[0]
-    assert snapref["inputs"]["adapter"] == ADAPTER
+    assert snapref["inputs"]["adapter"] == STYLE_ADAPTER
 
 
-def test_explicit_adapter_and_mode_override_the_defaults():
+def test_the_layer_can_pick_the_style_mode():
     models = make_models([ADAPTER, STYLE_ADAPTER])
     w = ComfyWorkflow(node_defs=models.node_inputs)
     model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
@@ -151,7 +151,6 @@ def test_explicit_adapter_and_mode_override_the_defaults():
             Image.create(Extent(64, 64)),
             1.0,
             (0.0, 1.0),
-            STYLE_ADAPTER,
             "style",
         )
     )
@@ -194,13 +193,13 @@ def test_adapter_detection_ignores_unrelated_loras():
     assert resources.find_snapref_adapter([STYLE_ADAPTER]) == STYLE_ADAPTER
 
 
-def test_the_adapter_that_reads_style_is_preferred():
+def test_the_widest_adapter_is_picked_without_asking():
     modes = {ADAPTER: ["cs", "char"], STYLE_ADAPTER: ["cs", "char", "style"]}
 
     # v2a sorts first by name, but only v2s can also serve a style reference.
     assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], modes) == STYLE_ADAPTER
     assert resources.find_snapref_adapter([ADAPTER], modes) == ADAPTER
-    assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], {}) == ADAPTER
+    assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], {}) == STYLE_ADAPTER
 
 
 def test_unknown_adapter_modes_do_not_block_the_layer():
@@ -237,9 +236,11 @@ def test_generate_graph_is_serializable_with_a_reference_layer():
 
     sampling = SamplingInput("euler", "normal", 4.0, 20, 0, 1234)
     cond = workflow.Conditioning.from_input(ConditioningInput("a cat", ""), sampling)
-    cond.control.append(workflow.Control.from_input(ControlInput(
-        ControlMode.reference, Image.create(Extent(64, 64)), 1.0, (0.0, 1.0), ADAPTER, "cs"
-    )))
+    cond.control.append(
+        workflow.Control.from_input(
+            ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), 1.0)
+        )
+    )
 
     w = ComfyWorkflow(node_defs=models.node_inputs)
     w = workflow.generate(

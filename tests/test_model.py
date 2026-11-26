@@ -358,8 +358,8 @@ async def test_h3_warning_only_fires_once_per_session(workflows_dir: Path):
 
 
 @qtapp
-async def test_control_layer_exposes_snapref_settings(workflows_dir: Path):
-    """Property setters emit <name>_changed, so the fields need a declared signal."""
+async def test_control_layer_keeps_the_reference_mode(workflows_dir: Path):
+    """Property setters emit <name>_changed, so the field needs a declared signal."""
     krita_doc = Krita.instance().openDocument("test")
 
     async with _model_env(krita_doc, workflows_dir) as (model, client):
@@ -367,13 +367,11 @@ async def test_control_layer_exposes_snapref_settings(workflows_dir: Path):
         assert ctrl is not None
 
         seen: list[str] = []
-        ctrl.ref_adapter_changed.connect(seen.append)
+        ctrl.ref_mode_changed.connect(seen.append)
         ctrl.mode = ControlMode.reference
-        ctrl.ref_adapter = "snapref_v2a_fp8.safetensors"
         ctrl.ref_mode = "style"
 
-        assert seen == ["snapref_v2a_fp8.safetensors"]
-        assert ctrl.ref_adapter == "snapref_v2a_fp8.safetensors"
+        assert seen == ["style"]
         assert ctrl.ref_mode == "style"
         await asyncio.sleep(0)  # let the mock connection settle before disconnecting
 
