@@ -956,25 +956,48 @@ class ComfyWorkflow:
         model: Output,
         clip: Output,
         vae: Output,
-        image: Output,
+        images: list[Output],
         adapter: str,
-        weight: float = 1.0,
+        weights: list[float] | None = None,
         mode: str = "cs",
     ):
-        """Reference adapter for Anima: keeps the reference K/V of every block for the sampler."""
-        return self.add(
-            "SnapRef",
-            1,
+        """Reference adapter for Anima: keeps the reference K/V of every block for the sampler.
+
+        The node reads up to three pictures of the same character, each with its own weight.
+        """
+        assert images, "SnapRef needs at least one reference"
+        weights = list(weights or [1.0] * len(images))
+        inputs: dict[str, Any] = dict(
             model=model,
             clip=clip,
             vae=vae,
-            image=image,
+            image=images[0],
             adapter=adapter,
             mode=mode,
             ref_in_uncond=False,
             ref_megapixels=1.0,
-            weight_1=weight,
+            weight_1=weights[0],
             fidelity=1.0,
+        )
+        if len(images) > 1:
+            inputs["image_2"] = images[1]
+            inputs["weight_2"] = weights[1]
+        if len(images) > 2:
+            inputs["image_3"] = images[2]
+            inputs["weight_3"] = weights[2]
+        return self.add("SnapRef", 1, **inputs)
+
+    def image_stitch(self, image1: Output, image2: Output):
+        """Side by side at the same height, the way SnapRef packs several views into one picture."""
+        return self.add(
+            "ImageStitch",
+            1,
+            image1=image1,
+            image2=image2,
+            direction="right",
+            match_image_size=True,
+            spacing_width=0,
+            spacing_color="white",
         )
 
     def apply_ip_adapter_face(

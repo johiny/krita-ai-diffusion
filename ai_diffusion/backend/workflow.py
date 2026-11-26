@@ -751,9 +751,10 @@ def apply_anima_references(
     models: ModelDict,
     adapter: str | None = None,
 ):
-    """Wrap the Anima model with SnapRef for every reference control layer.
+    """Wrap the Anima model with SnapRef for the reference control layers.
 
-    SnapRef keeps the reference K/V of each block, so the weight is linear (1 = as trained).
+    One node reads every reference: the node keeps the reference K/V of each block, so the
+    weight is linear (1 = as trained). More than three pictures are packed into one.
     """
     if models.arch is not Arch.anima:
         return model
@@ -766,18 +767,24 @@ def apply_anima_references(
     if adapter is None:
         return model  # the control layer reports the missing adapter
     clip_output = clip.model if isinstance(clip, Clip) else clip
-    for control in reference_layers:
-        image = control.image.load(w)
-        model = w.apply_snapref(
-            model,
-            clip_output,
-            vae,
-            image,
-            adapter,
-            weight=control.strength,
-            mode=control.ref_mode,
-        )
-    return model
+    images = [control.image.load(w) for control in reference_layers]
+    weights = [control.strength for control in reference_layers]
+    if len(images) > 3:
+        # The node reads three pictures; pack the rest side by side, the way the author feeds a
+        # multi-view reference. A packed picture carries one weight, so the per-layer one is lost.
+        packed = images[0]
+        for image in images[1:]:
+            packed = w.image_stitch(packed, image)
+        images, weights = [packed], [1.0]
+    return w.apply_snapref(
+        model,
+        clip_output,
+        vae,
+        images,
+        adapter,
+        weights,
+        reference_layers[0].ref_mode,
+    )
 
 
 def apply_ip_adapter(

@@ -118,12 +118,59 @@ def test_layer_strength_maps_to_the_linear_weight():
     assert snapref["inputs"]["weight_1"] == 0.5
 
 
-def test_several_reference_layers_chain():
+def test_several_reference_layers_share_one_node():
     w, model = build([ADAPTER], count=2)
 
-    first, second = nodes_of(w, "SnapRef")
-    assert second[1]["inputs"]["model"] == [first[0], 0]
-    assert str(model.node) == second[0]
+    (key, node), *rest = nodes_of(w, "SnapRef")
+    assert not rest, "one SnapRef node reads every reference of a generation"
+    assert str(model.node) == key
+    images = nodes_of(w, "ETN_LoadImageCache")
+    assert len(images) == 2
+    assert node["inputs"]["image"] == [images[0][0], 0]
+    assert node["inputs"]["image_2"] == [images[1][0], 0]
+    assert "image_3" not in node["inputs"]
+
+
+def test_each_reference_keeps_its_own_weight():
+    models = make_models([ADAPTER])
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
+    layers = [
+        workflow.Control.from_input(
+            ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), weight)
+        )
+        for weight in (1.0, 0.4)
+    ]
+
+    model = workflow.apply_anima_references(
+        w, model, layers, workflow.Clip(clip, Arch.anima), vae, models
+    )
+    assert_serializable(w)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert node["inputs"]["weight_1"] == 1.0
+    assert node["inputs"]["weight_2"] == 0.4
+
+
+def test_three_references_fill_every_slot():
+    w, _ = build([ADAPTER], count=3)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert "image_3" in node["inputs"]
+    assert node["inputs"]["weight_3"] == 1.0
+    assert not nodes_of(w, "ImageStitch")
+
+
+def test_four_references_are_packed_into_one_picture():
+    w, _ = build([ADAPTER], count=4)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    stitches = nodes_of(w, "ImageStitch")
+    assert len(stitches) == 3, "each extra picture joins the packed reference"
+    assert node["inputs"]["image"] == [stitches[-1][0], 0]
+    assert "image_2" not in node["inputs"]
+    assert "image_3" not in node["inputs"]
+    assert node["inputs"]["weight_1"] == 1.0
 
 
 def test_the_default_adapter_is_the_one_that_reads_style():

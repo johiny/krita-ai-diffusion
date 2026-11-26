@@ -377,6 +377,27 @@ async def test_control_layer_keeps_the_reference_mode(workflows_dir: Path):
 
 
 @qtapp
+async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        first = model.regions.control.emplace()
+        second = model.regions.control.emplace()
+        assert first is not None and second is not None
+
+        for layer in (first, second):
+            layer.mode = ControlMode.reference
+            layer.ref_mode = "cs"
+        assert not first._has_conflicting_reference_mode()
+        assert not second._has_conflicting_reference_mode()
+
+        second.ref_mode = "style"
+        assert first._has_conflicting_reference_mode()
+        assert second._has_conflicting_reference_mode()
+        await asyncio.sleep(0)
+
+
+@qtapp
 async def test_generate_batch(workflows_dir: Path):
     """With batch_count=8 and a wildcard prompt, DocumentModel.generate should enqueue 8 separate jobs.
     Each job re-evaluates the wildcard with a different seed, so both options must appear."""

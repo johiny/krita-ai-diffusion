@@ -78,6 +78,7 @@ class ControlLayer(QObject, ObservableProperties):
         self._update_is_supported()
 
         self.mode_changed.connect(self._update_is_supported)
+        self.ref_mode_changed.connect(self._update_is_supported)
         model.style_changed.connect(self._update_is_supported)
         model.edit_mode_changed.connect(self._update_is_supported)
         root.connection.state_changed.connect(self._update_is_supported)
@@ -213,6 +214,22 @@ class ControlLayer(QObject, ObservableProperties):
         self._generate_job = self._model.generate_control_layer(self)
         self.has_active_job = True
 
+    def refresh_support(self):
+        self._update_is_supported()
+
+    def _has_conflicting_reference_mode(self):
+        """SnapRef reads one way per generation, so all reference layers have to agree."""
+        try:
+            siblings = self._model.regions.control
+        except Exception:
+            return False
+        return any(
+            other is not self
+            and other.mode is ControlMode.reference
+            and other.ref_mode != self.ref_mode
+            for other in siblings
+        )
+
     def _update_is_supported(self):
         from .root import root
 
@@ -244,6 +261,9 @@ class ControlLayer(QObject, ObservableProperties):
                         _("The SnapRef adapter cannot read the reference this way")
                         + f": {chosen}"
                     )
+                    is_supported = False
+                elif self._has_conflicting_reference_mode():
+                    self.error_text = _("Reference layers must all use the same Reference mode")
                     is_supported = False
                 else:
                     self.error_text = ""
@@ -326,6 +346,7 @@ class ControlLayerList(QObject):
         mode = ControlMode.reference if self._model.arch.is_edit else self._last_mode
         control = ControlLayer(self._model, mode, layer.id, len(self._layers))
         control.mode_changed.connect(self._update_last_mode)
+        control.ref_mode_changed.connect(self._refresh_support)
         self._layers.append(control)
         self.added.emit(control)
 
@@ -344,6 +365,11 @@ class ControlLayerList(QObject):
         for layer in (c for c in self._layers if not c.is_supported):
             log.warning(f"Trying to use control layer {layer.mode.name}: {layer.error_text}")
         return [c.to_api(bounds, time) for c in self._layers if c.is_supported]
+
+    def _refresh_support(self):
+        """Reference layers share one reading mode, so changing it re-checks all of them."""
+        for layer in self._layers:
+            layer.refresh_support()
 
     def _update_last_mode(self, mode: ControlMode):
         self._last_mode = mode
