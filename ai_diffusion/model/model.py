@@ -375,15 +375,41 @@ class DocumentModel(QObject, ObservableProperties):
 
     def _prepare_upscale_image(self, dryrun=False):
         client = self._connection.client
-        extent = self._doc.extent
-        image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
         params = self.upscale.params
         params.upscale.model = params.upscale.model or client.models.default_upscaler
         if params.upscale.model not in client.models.upscalers:
             msg = _("The upscale model used by the document is not available on the server")
             self.report_error(Error(ErrorKind.warning, msg + f": {params.upscale.model}"))
             self.upscale.upscaler = params.upscale.model = client.models.default_upscaler
-        bounds = Bounds(0, 0, *self._doc.extent)
+
+        # Check for active selection (and keep its mask so the upscale integrates like inpaint)
+        # Reuse the same selection detection as the normal generation path.
+        selection_mask = None
+        selection_bounds = getattr(self._doc, "selection_bounds", None)
+        if selection_bounds is not None:
+            try:
+                selection_mask, _ = self._doc.create_mask_from_selection(
+                    SelectionModifiers(multiple=1)
+                )
+            except Exception:
+                selection_mask = None
+
+        if selection_bounds:
+            extent = selection_bounds.extent
+            image = self._doc.get_image(selection_bounds) if not dryrun else DummyImage(extent)
+            bounds = selection_bounds
+            target_offset = (selection_bounds.x, selection_bounds.y)
+            # Keep the mask aligned to the selection rectangle; scale it to the result later.
+            if selection_mask is not None:
+                rel = selection_bounds.relative_to(selection_mask.bounds)
+                selection_mask = Mask.crop(selection_mask, rel).to_image()
+        else:
+            extent = self._doc.extent
+            image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
+            bounds = Bounds(0, 0, *self._doc.extent)
+            target_offset = (0, 0)
+            selection_mask = None
+
         sys_prompt = "4k uhd"
         if self.arch.is_edit:
             sys_prompt = "Enhance image quality. Preserve original content."
@@ -424,9 +450,19 @@ class DocumentModel(QObject, ObservableProperties):
                 params.upscale.rtx_strength,
             )
 
-        target_bounds = Bounds(0, 0, *params.target_extent)
+        # Override target bounds if selection is active
+        if selection_bounds:
+            target_bounds = Bounds(*target_offset, *selection_bounds.extent * params.factor)
+        else:
+            target_bounds = Bounds(*target_offset, *params.target_extent)
         name = f"{target_bounds.width}x{target_bounds.height}"
         job_params = JobParams(target_bounds, name, seed=params.seed, regions=job_regions)
+        if selection_bounds is not None:
+            # Always record the selection rectangle: it tells add_upscale_layer to composite
+            # in place instead of resizing the canvas. The mask is optional (alpha feather).
+            job_params.selection_bounds = selection_bounds
+            if selection_mask is not None:
+                job_params.selection_mask = selection_mask
         return input, job_params
 
     def upscale_image(self):
@@ -441,7 +477,10 @@ class DocumentModel(QObject, ObservableProperties):
         self.upscale.set_in_progress(True)
         eventloop.run(_report_errors(self, self._enqueue_job(job, inputs)))
 
-        self._doc.resize(job.params.bounds.extent)
+        # Only resize the canvas for a full-image upscale. With a selection the canvas
+        # keeps its dimensions and the result is composited in place (see add_upscale_layer).
+        if job.params.selection_bounds is None:
+            self._doc.resize(job.params.bounds.extent)
         self.upscale.target_extent_changed.emit(self.upscale.target_extent)
 
     def estimate_cost(self, kind=JobKind.diffusion):
@@ -904,13 +943,36 @@ class DocumentModel(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
-        self.apply_result(
-            job.results[0],
-            job.params,
-            settings.apply_behavior,
-            settings.apply_region_behavior,
-            "[Upscale] ",
-        )
+        image = job.results[0]
+
+        sel_mask = job.params.selection_mask
+        sel_bounds = job.params.selection_bounds
+        if sel_bounds is not None:
+            # The upscaler returns the enlarged selection (selection_extent * factor).
+            # Shrink it back to the original selection size so it fits in place, then
+            # feather it with the selection mask and composite over the full canvas
+            # exactly like a normal inpaint result.
+            image = Image.scale(image, sel_bounds.extent)
+            if sel_mask is not None:
+                mask = Image.scale(sel_mask, image.extent)
+                qimg = image._qimage.convertToFormat(image._qimage.Format.Format_ARGB32)
+                qimg.setAlphaChannel(mask._qimage)
+                image = Image(qimg)
+
+            x, y = sel_bounds.offset
+            canvas = self._doc.get_image()  # full canvas at original resolution
+            canvas.draw_image(image, (x, y), blend=BlendMode.alpha)
+            self.layers.update_layer_image(self.layers.active, canvas, Bounds(0, 0, *canvas.extent))
+        else:
+            # No selection: normal full-image upscale (canvas was resized in upscale_image).
+            self.apply_result(
+                image,
+                job.params,
+                settings.apply_behavior,
+                settings.apply_region_behavior,
+                "[Upscale] ",
+            )
+        self._layer = None
 
     def set_workspace(self, workspace: Workspace):
         if self.workspace is Workspace.live:
@@ -1192,7 +1254,11 @@ class UpscaleWorkspace(QObject, ObservableProperties):
 
     @property
     def target_extent(self):
-        return ensure(self._model()).document.extent * self.factor
+        doc = ensure(self._model())._doc
+        base = getattr(doc, "selection_bounds", None)
+        if base:
+            return base.extent * self.factor
+        return doc.extent * self.factor
 
     @property
     def params(self):

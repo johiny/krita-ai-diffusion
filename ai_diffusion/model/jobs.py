@@ -63,6 +63,8 @@ class JobParams:
     frame: tuple[int, int, int] = (0, 0, 0)
     animation_id: str = ""
     resize_canvas: bool = False
+    selection_mask: Any | None = None  # runtime-only mask for selection upscaling
+    selection_bounds: Any | None = None  # original selection bounds (pre-scale) for compositing
 
     @staticmethod
     def from_dict(data: dict[str, Any]):
