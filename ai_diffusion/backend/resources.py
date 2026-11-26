@@ -799,11 +799,6 @@ SNAPREF_REFERENCES = 3
 """Pictures the SnapRef node reads, each one with its own weight."""
 
 
-def snapref_can_pack(node_inputs, count: int) -> bool:
-    """More than three references are packed into one picture with ImageStitch, a ComfyUI node."""
-    return count <= SNAPREF_REFERENCES or "ImageStitch" in node_inputs
-
-
 def search_path(kind: ResourceKind, arch: Arch, identifier: ControlMode | UpscalerName | str):
     return search_paths.get(resource_id(kind, arch, identifier), None)
 

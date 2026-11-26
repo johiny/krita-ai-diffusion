@@ -42,10 +42,12 @@ Each `Reference` control layer contributes one picture with its own strength:
 
 - **1 to 3 layers**: one `SnapRef` node, `image` / `image_2` / `image_3` with
   `weight_1` / `weight_2` / `weight_3` = the layer strength.
-- **4 or more layers**: the pictures are packed side by side with `ImageStitch` into one reference,
-  the way the author feeds a multi-view reference. A packed picture is a single reference for the
-  node, so the per-layer weight is lost and the packed reference uses weight 1.
-- **Strength 0** removes a layer from the graph entirely, like the node does.
+- **4 or more layers**: the first three are read, in layer order. The rest are marked on the layer
+  (`SnapRef reads three references and this layer is past the third`) and never reach the graph.
+  Packing them into one picture was tried and dropped: they share one megapixel and one weight, and
+  every extra view made the result worse.
+- **Strength 0** removes a layer from the graph entirely, like the node does, and does not take one
+  of the three slots.
 
 All references of a generation share one role: their K/V are concatenated at the same RoPE frame, so
 the model cannot tell "this is the character, that is the style". The mode is therefore a setting of
@@ -56,9 +58,8 @@ Not supported, by design of the node:
 
 - A character reference and a style reference in the same generation. Use one mode plus prompt tags,
   or two passes.
-- More than three references with an individual weight. `SnapRefSimple` reads up to eight pictures
-  with a strength each, but its references are files in the ComfyUI input folder, not images from the
-  graph.
+- More than three references in one generation. `SnapRefSimple` reads up to eight pictures with a
+  strength each, but its references are files in the ComfyUI input folder, not images from the graph.
 
 Two different characters need the node's `multi_layout="stitch"`: the pictures are packed into one
 reference and the prompt asks for `2girls`. The plugin keeps the node's default (`separate`),
@@ -93,7 +94,7 @@ identities needs two passes, not two references.
 | `The server is missing the SnapRef adapter for Anima references` | No lora with `snapref` in the name, or the `snapref` package is not installed |
 | `The SnapRef adapter cannot read the reference this way: <adapter>` | The chosen adapter has no branch for that mode (`v2a` has no style) |
 | `Reference layers must all use the same Reference mode` | Two reference layers with different modes |
-| `The server cannot pack more than three references: ImageStitch` | More than three references on a ComfyUI build without the core `ImageStitch` node |
+| `SnapRef reads three references and this layer is past the third` | More than three active reference layers on one generation |
 | `Server error: Object of type Arch is not JSON serializable` | A `Clip` reached the node inputs |
 | Reference ignored, graph has one `SnapRef` | Every layer has strength 0, or the model is not Anima |
 

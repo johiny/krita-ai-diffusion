@@ -401,9 +401,10 @@ async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
         assert second._has_conflicting_reference_mode()
         first.ref_mode = "style"
 
-        assert first._reference_layer_count() == 2
+        assert first._reference_layer_index() == 0
+        assert second._reference_layer_index() == 1
         second.strength = 0
-        assert first._reference_layer_count() == 1, "a muted layer never reaches the node"
+        assert first._reference_layer_index() == 0, "a muted layer never reaches the node"
         await asyncio.sleep(0)
 
 
@@ -431,7 +432,8 @@ async def test_more_than_three_references_need_the_stitch_node(workflows_dir: Pa
         assert fourth is not None
         fourth.mode = ControlMode.reference
         assert not fourth.is_supported
-        assert "ImageStitch" in fourth.error_text
+        assert "past the third" in fourth.error_text
+        assert all(layer.is_supported for layer in model.regions.control[:3])
         await asyncio.sleep(0)
 
 

@@ -11,12 +11,12 @@ from .. import util
 from ..backend import resources
 from ..backend.api import ControlInput
 from ..backend.resources import (
+    SNAPREF_REFERENCES,
     Arch,
     ControlMode,
     ResourceKind,
     find_snapref_adapter,
     resource_id,
-    snapref_can_pack,
     snapref_mode_supported,
 )
 from ..image import BlendMode, Bounds, Extent, Image
@@ -218,17 +218,18 @@ class ControlLayer(QObject, ObservableProperties):
     def refresh_support(self):
         self._update_is_supported()
 
-    def _reference_layer_count(self) -> int:
-        """Layers that will reach the node: muted ones are dropped before the graph is built."""
+    def _reference_layer_index(self) -> int:
+        """Position of this layer among the ones that reach the node; muted layers do not count."""
         try:
-            siblings = self._model.regions.control
+            siblings = list(self._model.regions.control)
         except Exception:
             return 0
-        return sum(
-            1
+        active = [
+            other
             for other in siblings
             if other.mode is ControlMode.reference and other.strength > 0
-        )
+        ]
+        return active.index(self) if self in active else 0
 
     def _has_conflicting_reference_mode(self):
         """SnapRef reads one way per generation, so all reference layers have to agree."""
@@ -278,12 +279,9 @@ class ControlLayer(QObject, ObservableProperties):
                 elif self._has_conflicting_reference_mode():
                     self.error_text = _("Reference layers must all use the same Reference mode")
                     is_supported = False
-                elif not snapref_can_pack(
-                    client.models.node_inputs, self._reference_layer_count()
-                ):
-                    self.error_text = (
-                        _("The server cannot pack more than three references")
-                        + ": ImageStitch"
+                elif self._reference_layer_index() >= SNAPREF_REFERENCES:
+                    self.error_text = _(
+                        "SnapRef reads three references and this layer is past the third"
                     )
                     is_supported = False
                 else:

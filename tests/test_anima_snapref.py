@@ -200,22 +200,14 @@ def test_three_references_fill_every_slot():
     assert not nodes_of(w, "ImageStitch")
 
 
-def test_four_references_are_packed_into_one_picture():
-    w, _ = build([ADAPTER], count=4)
+def test_only_the_first_three_references_reach_the_node():
+    w, _ = build([ADAPTER], count=5)
 
     (_, node) = nodes_of(w, "SnapRef")[0]
-    stitches = nodes_of(w, "ImageStitch")
-    assert len(stitches) == 3, "each extra picture joins the packed reference"
-    assert node["inputs"]["image"] == [stitches[-1][0], 0]
-    assert "image_2" not in node["inputs"]
-    assert "image_3" not in node["inputs"]
-    assert node["inputs"]["weight_1"] == pytest.approx(1.0)
-    for key, stitch in stitches:
-        assert stitch["inputs"]["match_image_size"] is True
-        for name in ("image1", "image2"):
-            link = stitch["inputs"][name]
-            assert isinstance(link, list) and len(link) == 2, (key, name, link)
-            assert link[0] in w.root, (key, name, link)
+    assert "image_3" in node["inputs"]
+    assert "image_4" not in node["inputs"]
+    assert len(nodes_of(w, "ETN_LoadImageCache")) == 3, "the extra layers are not even encoded"
+    assert not nodes_of(w, "ImageStitch"), "packing them into one picture was dropped"
 
 
 def test_the_default_adapter_is_the_one_that_reads_style():
@@ -292,15 +284,6 @@ def test_the_widest_adapter_is_picked_without_asking():
     assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], modes) == STYLE_ADAPTER
     assert resources.find_snapref_adapter([ADAPTER], modes) == ADAPTER
     assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], {}) == STYLE_ADAPTER
-
-
-def test_packing_needs_the_core_stitch_node():
-    without_stitch = {"SnapRef": {}}
-
-    assert resources.snapref_can_pack(without_stitch, 1)
-    assert resources.snapref_can_pack(without_stitch, resources.SNAPREF_REFERENCES)
-    assert not resources.snapref_can_pack(without_stitch, resources.SNAPREF_REFERENCES + 1)
-    assert resources.snapref_can_pack({"ImageStitch": {}}, resources.SNAPREF_REFERENCES + 1)
 
 
 def test_unknown_adapter_modes_do_not_block_the_layer():

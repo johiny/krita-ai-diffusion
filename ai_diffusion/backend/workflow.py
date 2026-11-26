@@ -770,27 +770,21 @@ def apply_anima_references(
     clip_output = clip.model if isinstance(clip, Clip) else clip
     # The node turns the weight into a log bias, so it drops weight-0 pictures before encoding
     # them. Do the same here, and skip the node when there is nothing left to read.
-    references = [
-        (control.image.load(w), control.strength)
-        for control in reference_layers
-        if control.strength > 0
-    ]
-    if not references:
+    active = [control for control in reference_layers if control.strength > 0]
+    if not active:
         return model
-    images = [image for image, _ in references]
-    weights = [weight for _, weight in references]
-    if len(images) > SNAPREF_REFERENCES:
-        # The node reads three pictures; pack the rest side by side, the way the author feeds a
-        # multi-view reference. A packed picture carries one weight, so the per-layer one is lost.
-        images, weights = [w.image_stitch(images, match_image_size=True)], [1.0]
+    # The node reads three pictures, each with its own weight. Packing the extra ones into a single
+    # picture was tried and dropped: they share one megapixel and one weight, and every extra view
+    # made the result worse. The remaining layers are reported on the layer itself.
+    active = active[:SNAPREF_REFERENCES]
     return w.apply_snapref(
         model,
         clip_output,
         vae,
-        images,
+        [control.image.load(w) for control in active],
         adapter,
-        weights,
-        reference_layers[0].ref_mode,
+        [control.strength for control in active],
+        active[0].ref_mode,
     )
 
 
