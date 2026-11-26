@@ -51,10 +51,17 @@ def make_models(
     return ModelDict(client_models, ResourceKind.checkpoint, arch)
 
 
-def reference_layers(count: int, strength: float = 1.0) -> list[workflow.Control]:
+def reference_layers(
+    count: int, strength: float = 1.0, layout: str = "separate"
+) -> list[workflow.Control]:
     return [
         workflow.Control.from_input(
-            ControlInput(ControlMode.reference, Image.create(Extent(64, 64)), strength)
+            ControlInput(
+                ControlMode.reference,
+                Image.create(Extent(64, 64)),
+                strength,
+                ref_layout=layout,
+            )
         )
         for _ in range(count)
     ]
@@ -66,13 +73,19 @@ def build(
     arch: Arch = Arch.anima,
     strength: float = 1.0,
     adapters: dict[str, list[str]] | None = None,
+    layout: str = "separate",
 ):
     models = make_models(loras, arch, adapters)
     w = ComfyWorkflow(node_defs=models.node_inputs)
     model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
     # The real builder hands over the Clip wrapper, which carries the arch with it.
     model = workflow.apply_anima_references(
-        w, model, reference_layers(count, strength), workflow.Clip(clip, arch), vae, models
+        w,
+        model,
+        reference_layers(count, strength, layout),
+        workflow.Clip(clip, arch),
+        vae,
+        models,
     )
     assert_serializable(w)
     return w, model
@@ -165,6 +178,23 @@ def _reference_layers(weights):
         for weight in weights
     ]
     return w, models, model, clip, vae, layers
+
+
+def test_references_are_encoded_one_by_one_by_default():
+    w, _ = build([ADAPTER], count=2)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert node["inputs"]["multi_layout"] == "separate"
+    assert not nodes_of(w, "ImageStitch")
+
+
+def test_stitched_references_are_packed_by_the_node():
+    w, _ = build([ADAPTER], count=2, layout="stitch")
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert node["inputs"]["multi_layout"] == "stitch"
+    assert "image_2" in node["inputs"]
+    assert not nodes_of(w, "ImageStitch"), "the node packs them itself"
 
 
 def test_a_reference_with_zero_strength_is_left_out():

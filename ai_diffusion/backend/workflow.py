@@ -359,10 +359,13 @@ class Control:
     strength: float = 1.0
     range: tuple[float, float] = (0.0, 1.0)
     ref_mode: str = "cs"
+    ref_layout: str = "separate"
 
     @staticmethod
     def from_input(i: ControlInput):
-        return Control(i.mode, ImageOutput(i.image), None, i.strength, i.range, i.ref_mode)
+        return Control(
+            i.mode, ImageOutput(i.image), None, i.strength, i.range, i.ref_mode, i.ref_layout
+        )
 
 
 class Clip(NamedTuple):
@@ -791,6 +794,7 @@ def apply_anima_references(
         adapter,
         weights,
         reference_layers[0].ref_mode,
+        reference_layers[0].ref_layout,
     )
 
 

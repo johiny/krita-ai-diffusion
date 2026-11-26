@@ -44,6 +44,7 @@ class ControlLayer(QObject, ObservableProperties):
     end = Property(1.0, persist=True)
     use_custom_strength = Property(False, persist=True, setter="set_use_custom_strength")
     ref_mode = Property("cs", persist=True)
+    ref_layout = Property("separate", persist=True)
     is_supported = Property(True)
     is_pose_vector = Property(False)
     can_generate = Property(True)
@@ -59,6 +60,7 @@ class ControlLayer(QObject, ObservableProperties):
     end_changed = pyqtSignal(float)
     use_custom_strength_changed = pyqtSignal(bool)
     ref_mode_changed = pyqtSignal(str)
+    ref_layout_changed = pyqtSignal(str)
     is_supported_changed = pyqtSignal(bool)
     is_pose_vector_changed = pyqtSignal(bool)
     can_generate_changed = pyqtSignal(bool)
@@ -371,6 +373,9 @@ class ControlLayerList(QObject):
         control.ref_mode_changed.connect(
             lambda mode, source=control: self._sync_ref_mode(source, mode)
         )
+        control.ref_layout_changed.connect(
+            lambda layout, source=control: self._sync_ref_layout(source, layout)
+        )
         self._layers.append(control)
         self._refresh_support()
         self.added.emit(control)
@@ -394,10 +399,17 @@ class ControlLayerList(QObject):
 
     def _sync_ref_mode(self, source: ControlLayer, mode: str):
         """The node reads every reference the same way, so one mode covers the whole generation."""
+        self._sync_ref_setting(source, "ref_mode", mode)
+
+    def _sync_ref_layout(self, source: ControlLayer, layout: str):
+        """Separate views or one packed picture: the node builds one reference set per run."""
+        self._sync_ref_setting(source, "ref_layout", layout)
+
+    def _sync_ref_setting(self, source: ControlLayer, name: str, value: str):
         for layer in self._layers:
             if layer is not source and layer.mode is ControlMode.reference:
-                if layer.ref_mode != mode:
-                    layer.ref_mode = mode
+                if getattr(layer, name) != value:
+                    setattr(layer, name, value)
 
     def _refresh_support(self):
         """Reference layers share one reading mode, so changing it re-checks all of them."""

@@ -94,6 +94,8 @@ class ControlInput:
     range: tuple[float, float] = (0.0, 1.0)
     # Anima references: what the reference provides ("cs", "char" or "style")
     ref_mode: str = "cs"
+    # Anima references: "separate" reads each picture on its own, "stitch" packs them side by side
+    ref_layout: str = "separate"
 
 
 @dataclass

@@ -38,7 +38,16 @@ raising the weight past 1.0 starts leaking the character from the reference.
 
 ## Reference layers
 
-Each `Reference` control layer contributes one picture with its own strength:
+Each `Reference` control layer contributes one picture with its own strength, and the `References`
+combo decides how the pictures are read:
+
+- **Separate views** (default): every picture is encoded on its own, one after the other. This is the
+  case the node was trained for: several views of *one* character, each with its own weight.
+- **Side by side**: the node packs the pictures into one ~1 MP picture (what Image Stitch does) and
+  reads it as a single reference. Weights no longer apply. This is the way to get *two different
+  characters* into one generation; the pictures are scaled to the first one's height.
+
+How many pictures reach the node:
 
 - **1 to 3 layers**: one `SnapRef` node, `image` / `image_2` / `image_3` with
   `weight_1` / `weight_2` / `weight_3` = the layer strength.
@@ -60,8 +69,9 @@ Not supported, by design of the node:
   with a strength each, but its references are files in the ComfyUI input folder, not images from the
   graph.
 
-Two characters are one reference, as the author does it: `ImageStitch` side by side plus `2girls`
-and the left/right position in the prompt. Horizontal pictures score better.
+Two characters are one reference: `References: Side by side`, two horizontal pictures of similar
+height, `2girls` in the prompt and the left/right position spelled out. Separate layers never keep
+the two apart, because the node has a single reference role and blends them into one subject.
 
 ## Recommended settings
 
