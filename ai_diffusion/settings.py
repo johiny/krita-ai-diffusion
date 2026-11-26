@@ -443,6 +443,7 @@ class Settings(QObject):
         _("Maximum resolution to generate images at, in megapixels (FullHD ~ 2MP, 4k ~ 8MP)."),
     )
 
+
     dynamic_caching: bool
     _dynamic_caching = Setting(
         _("Dynamic Caching"),

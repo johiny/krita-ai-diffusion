@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar, Literal, NamedTuple, cast
+from typing import Literal, NamedTuple, cast
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
@@ -115,7 +115,7 @@ class KritaDocument(Document):
     Keeps track of selection and current time changes by polling at a fixed interval.
     """
 
-    _instances: ClassVar[WeakValueDictionary[str, KritaDocument]] = WeakValueDictionary()
+    _instances: WeakValueDictionary[str, KritaDocument] = WeakValueDictionary()
 
     def __init__(self, krita_document: krita.Document, id: str | None):
         super().__init__()
@@ -152,7 +152,7 @@ class KritaDocument(Document):
             if doc.activeNode() is None:
                 return None
             all_docs = acquire_elements(Krita.instance().documents())
-            if doc not in all_docs:
+            if doc not in all_docs or not doc.activeNode():
                 return None  # document not fully initialized yet
             id = cls._id_from_annotation(doc)
             for other in all_docs:
@@ -293,9 +293,10 @@ class KritaDocument(Document):
 
     @property
     def is_valid(self):
-        # Check if  document that has been closed. Don't check activeNode() here,
-        # it pumps Qt events and may interrupt actions when called frequently.
-        return self._doc in acquire_elements(Krita.instance().documents())
+        # can be a document that has been closed, or one that hasn't finished initializing
+        return self._doc.activeNode() is not None and self._doc in acquire_elements(
+            Krita.instance().documents()
+        )
 
     @property
     def is_active(self):

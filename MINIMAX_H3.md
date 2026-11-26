@@ -1,0 +1,183 @@
+# MiniMax H3 / P-H3 Image
+
+MiniMax H3 is an omni-modal diffusion transformer. `p-h3-image` is the distilled image variant, and
+the same image graph runs any H3 checkpoint as base model (DaSiWa, ErosMax, ref2va). The plugin
+treats the whole family as one architecture: `MiniMax H3`.
+
+ComfyUI reports `base_model: "unknown"` for every one of these files (the tooling-nodes pack does
+not know the `MiniMaxH3` class unless patched), so the architecture is resolved from the filename
+(`h3` / `minimax`) and, when available, from the `minimax-h3` value the patched server reports.
+
+## Recommended settings (the recipe the model ships with)
+
+| Knob | Value |
+|---|---|
+| Sampler | `er_sde` |
+| Scheduler | `manual` (distilled 8-step schedule) |
+| Steps | 8 |
+| CFG | 1.0 |
+| Negative prompt | unused at CFG 1.0 |
+
+Everything else keeps the model in familiar territory: no LoRA required, no ControlNet, no
+regional prompts and no masked inpaint. A selection (Generate and Refine alike, live preview
+included) is emulated in three steps:
+
+1. The painted area of the selection mask is measured and cropped with 25% extra context
+   (minimum 32 px, aligned to 32), because the model regenerates the whole crop and needs to see
+   what surrounds the edit. The mask image itself spans the whole canvas, so the selection is
+   measured from its pixels, not from its bounds.
+2. The crop is sent as reference image 1 and regenerated.
+3. The patch is pasted back into the untouched image at the selection offset, then only the pixels
+   inside the selection are composited, faded by the Selection Blend value. Selection Feather and
+   Grow describe a denoise mask and are not used: pasting invented pixels into that halo is what
+   made results appear to leak outside the selection.
+
+Inside the selection everything is regenerated - the node has no mask input - so keep selections
+small and prompts focused on the change when the original has to survive.
+
+When the **H3 Image Studio** pack is installed, edits go through `H3ImagePrepare` in
+`image_to_image (FL2VA)` mode instead: the latent starts from the source image with
+`preserve_strength` 0.6, so the model keeps the composition instead of re-rendering the crop from
+scratch. Measured on a 640x544 canvas with a 400x360 selection: no global shift (dx=0, dy=0) and
+0 px changed outside the selection. Without the pack the workflow falls back to
+`PH3ImageConditioning`, which only sees the crop as a reference image.
+
+## Following Pruna's recommendations
+
+The model card is explicit about what P-H3-Image needs, and the workflow follows it:
+
+- **No prompt upsampler.** The request is sent exactly as typed. The Qwen3.5-9B upsampler from the
+  model card was wired as a chained job (`expand_h3_prompt`) and then removed: it cost ~11 s per
+  edit, it never ran for `generate` jobs (there is no canvas image to condition it, so it failed
+  silently and the client kept the typed prompt), and on text-only requests it rewrote the medium
+  into a photograph. Prompts here are written by hand and work at 100-300 characters.
+- **4 MP edits.** Crops are upscaled to 4 MP (capped at 4x linear) before sampling and scaled back
+  after, per *"edits work best at 4 or 8 MP"*. Expect edits to take a minute rather than seconds.
+- **`euler`** with the 8-step schedule, as in the official workflows.
+- **LoRAs are model only.** P-H3-Image LoRAs (`p-h3-image_lora_bf16`, 2 GB) apply at strength 1.0
+  through `LoraLoaderBypassModelOnly` and turn any MiniMax-H3 FL2VA checkpoint into the P-H3-Image
+  edit model, so a finetune can be used without giving up its style.
+
+Region layers are still unsupported and raise a clear error.
+
+Picking the preset **"MiniMax H3 - distilled 8 steps"** applies the whole table at once. New H3
+styles select it automatically while they still hold the plugin default.
+
+## Everything is configurable
+
+The graph passes whatever the style provides, so you can experiment freely:
+
+- **Sampler** - any sampler ComfyUI exposes. `dpmpp_2m` and `euler` produce coherent images with
+  the distilled schedule; unknown names fall back to `er_sde`.
+- **Scheduler** - `manual` (distilled) or any ComfyUI scheduler. Choosing another scheduler makes
+  the workflow emit `BasicScheduler` with the configured step count instead of `ManualSigmas`.
+- **Steps** - honoured for every scheduler except `manual`, where the 9 documented sigmas define
+  the trajectory (the step slider has no effect there).
+- **CFG** - values above 1.0 add a second `PH3ImageConditioning` (empty or user negative prompt)
+  and a `CFGGuider`.
+- **Strength** - ignored. The model has no denoise step and its latent is a paired video+audio
+  tensor from `PH3ImageConditioning`, so it cannot start from a partially noised image. The slider
+  stays visible but changes nothing; a selection is always fully regenerated.
+
+Nothing blocks a combination. Be aware that the distilled model is only tuned for the recommended
+row: in a 512x512 A/B test, `dpmpp_2m + karras + 12 steps` returned an abstract colour field
+instead of the prompted scene, while `dpmpp_2m` with the manual schedule stayed coherent. Use the
+free knobs to explore, not as a quality guarantee.
+
+## Official MiniMax H3-Image (native image model)
+
+The plugin now also drives the official native model, `minimax_h3_image_*` (registered as
+`Arch.h3_image`), using its own node family: `MiniMaxH3ImageConditioning` (clip, prompt, width,
+height + optional vae and autogrow images) and `H3ImageToImagePrepare` for image edits. Recipe:
+6 steps, `euler` + `simple`, CFG 1, no negative prompt, up to 16 reference images addressed as
+`<image_1>`..`<image_16>`. Text encoder Qwen3-VL 32B, VAE `minimax_h3_image_vae_fp16`.
+
+P-H3-Image (`Arch.h3`, Pruna's adaptation of the video model) is still supported; both coexist
+and the plugin picks the builder from the checkpoint's architecture. The official model is a
+different VAE/TE/node family, so mixing components (e.g. the 8B TE with the official DiT) raises
+`mat1 and mat2 shapes cannot be multiplied (…x4096 and 5120x5376)`.
+
+## Writing prompts
+
+
+There is no prompt upsampler any more: the request reaches the model as typed. The prompt is
+therefore part of the recipe — action first, every trait assigned to a named picture, pose as
+geometry, the medium stated when a photographic reference is connected. Rules, templates,
+anti-patterns and the post-job checklist: [MINIMAX_H3_PROMPTING.md](MINIMAX_H3_PROMPTING.md).
+
+## References (multiple images)
+
+H3 has no IP-Adapter: reference layers travel inside the conditioning. Put the pictures on control
+layers with mode **Reference** and the plugin wires them into the conditioning node:
+
+| pictures | conditioning | notes |
+| --- | --- | --- |
+| canvas only | `image_to_image (FL2VA)` | the latent is seeded from the canvas |
+| canvas + 1..8 references | `reference_edit (REF2VA)` | canvas is `<Picture 1>`, references follow as `<Picture 2>`..`<Picture 9>` |
+| no canvas, 1..8 references | `reference_edit (REF2VA)` | the first reference becomes `<Picture 1>`: a text-to-image built from references |
+
+The limit is nine pictures per job (one plus eight references); the plugin rejects the ninth
+reference instead of dropping it. Both `H3ImagePrepare` (Image Studio) and the fallback
+`PH3ImageConditioning` (p-h3) receive them, the difference being `reference_image_N` slots versus
+`images.image_N` autogrow inputs.
+
+Edits get a guide line before the prompt — *"Take only the traits the instruction assigns to a
+reference picture and keep everything else from `<Picture 1>`"* — because the node tells the model
+to copy a trait from whichever picture the prompt assigns it to. Measured on a 512x512 edit: with a
+loose prompt ("lilac hair like `<Picture 2>`") the output became the reference, background included
+(mean distance 63 from the canvas, 27 from the reference); with the guide the canvas stayed in
+charge (distance 3 from the canvas) and only the hair colour changed.
+
+Plain text-to-image from references skips that guide: there is no canvas to preserve, so the
+description decides and the node's own rules take over.
+
+### Naming the pictures
+
+Write `<layer:Layer name>` in the prompt. The plugin adds that layer as a reference (the layer only
+has to exist; it does not need to be switched to Reference mode by hand) and replaces the token with
+`<Picture N>`:
+
+```
+Change only the hair to the colour of <layer:Hair ref>, keep the pose and the background.
+```
+
+- In an edit the canvas is `<Picture 1>`, so the named layers start at `<Picture 2>`. You do not
+  have to write `<Picture 1>` yourself: every edit gets a guide that names it as the picture on the
+  canvas and says the instruction refers to it unless another picture is named.
+- In a text-to-image job there is no canvas, so the first named layer is `<Picture 1>`.
+- Reference layers added by hand work too: they are numbered in layer order, after any named ones.
+- Pose, depth and scribble layers are not converted — H3 has no ControlNet, so those modes stay
+  unsupported and the UI says so.
+
+Naming the role is what the model keys on: the node warns when a connected picture is never
+mentioned, and adherence drops when a picture has no stated job.
+
+## Performance
+
+- 512x512, one 21 GB finetune, warm model: ~14-20 s per image (`er_sde`, 8 steps).
+- First load of a 21 GB checkpoint dominates (~40-90 s).
+- The distilled `p-h3-image_w4a8` (12.4 GB) is the one that comfortably reaches 8 MP on a 3090;
+  the finetunes are tight at that resolution.
+- References switch the conditioning to REF2VA and cost a different amount: 24-34 s for 512x512 and
+  1024x1024 with `h3ErosMax`, and 1024x1024 already peaks at 23.8 GB of VRAM, so **do not run the
+  reference path at 4 MP on a 24 GB card**. `reference_size` barely matters for memory
+  (`max_identity_2048` 23.8 GB vs `match_generation_area` 23.8 GB), only for time (34 s vs 27 s).
+
+## Performance (RTX 3090, `--fast` dynamic VRAM loading)
+
+Measured with `h3ErosMax` (20 GB int8), `preserve_strength` 0.6, one edited image, seed fixed.
+Without a LoRA, generation time is dominated by streaming the 20 GB transformer from disk, not by
+pixels. With the P-H3 LoRA at 4 MP the weights no longer fit alongside the activations and time
+scales with area:
+
+| Config | 1088x1088 | 1440x1440 | 2048x2048 |
+|---|---|---|---|
+| plain generation | 41 s | 47 s | 45 s |
+| control, fresh seed | 60 s | 55 s | 64 s |
+| LoRA 1.0 + euler | 47 s | 57 s | 135 s |
+
+- These numbers are without a prompt upsampler. The chained upsampler job added 11-17 s warm and
+  28 s cold per job (it re-staged weights after it ran) and was removed; an edit is now the
+  sampling time plus the reference encode, nothing else.
+- Peak VRAM: 21-23 GB at 1024x1024 with one reference. 4 MP with references does not fit: 23.8 GB
+  measured, so keep reference edits at 1-2 MP.

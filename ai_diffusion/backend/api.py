@@ -159,6 +159,14 @@ class InpaintParams:
         params.feather = clamp(params.feather, 0, 499)
         return params
 
+    def on_grid(self, grid: int):
+            """Round grow, feather and blend to a cell grid, for models that regenerate whole cells."""
+            params = copy(self)
+            params.grow = ((params.grow + grid - 1) // grid) * grid
+            params.feather = ((params.feather + grid - 1) // grid) * grid
+            params.blend = ((params.blend + grid - 1) // grid) * grid
+            return params
+
 
 @dataclass
 class UpscaleInput:

@@ -136,7 +136,7 @@ class ScaledExtent(NamedTuple):
 # Image resolution for diffusion should be divisible by this factor, either because it is the
 # required latent compression factor, or to avoid border artifacts with UNET models.
 def diffusion_multiple(arch: Arch):
-    return 32 if arch is Arch.qwen2 else 16
+    return 32 if arch in (Arch.qwen2, Arch.h3, Arch.h3) else 16
 
 
 class CheckpointResolution(NamedTuple):
@@ -160,6 +160,16 @@ class CheckpointResolution(NamedTuple):
             if inpaint:
                 # Inpaint models for Flux/Z-Image only work reliably around 1MP
                 default = (640, 1280, 512**2, 1024**2)
+            # H3 needs at least 4 MP to work well (community recommendation).
+            # Below 4 MP the output breaks down.
+            if arch is Arch.h3:
+                h3_mp = style.h3_target_resolution if style else 0
+                if h3_mp > 0:
+                    h3_px = round(math.sqrt(h3_mp * 10**6))
+                    h3_px = (h3_px // 32) * 32  # round to 32px multiple
+                    default = (h3_px, h3_px, h3_px**2, h3_px**2)
+                else:
+                    default = (2048, 2848, 4 * 10**6, 8 * 10**6)
             min_size, max_size, min_pixel_count, max_pixel_count = res.get(arch, default)
         else:
             mult = diffusion_multiple(arch)

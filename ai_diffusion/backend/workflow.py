@@ -18,7 +18,7 @@ from ..text import (
     replace_layers,
     strip_prompt_comments,
 )
-from ..util import ensure, median_or_zero, unique
+from ..util import PluginError, ensure, median_or_zero, unique
 from . import resolution, resources
 from .api import (
     CheckpointInput,
@@ -55,6 +55,32 @@ def detect_inpaint_mode(extent: Extent, area: Bounds):
     if area.width >= extent.width or area.height >= extent.height:
         return InpaintMode.expand
     return InpaintMode.fill
+
+
+# P-H3 Image is distilled for exactly this 8-step schedule (8 sampling steps, 9 sigmas).
+h3_sigmas = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
+
+
+def h3_agenda(steps: int) -> str:
+    """The distilled agenda resampled to `steps` steps.
+
+    `h3_sigmas` is a fixed eight-step curve, so passing it verbatim ignored the step count and every
+    job ran eight steps no matter what the UI said. Interpolating keeps the curve and honours the
+    setting; the exact eight-step values are returned untouched.
+    """
+    values = [float(v) for v in h3_sigmas.split(",")]
+    if steps == len(values) - 1:
+        return h3_sigmas
+    count = max(2, steps)
+    result = []
+    for index in range(count + 1):
+        position = index * (len(values) - 1) / count
+        low = int(position)
+        high = min(low + 1, len(values) - 1)
+        fraction = position - low
+        result.append(values[low] + (values[high] - values[low]) * fraction)
+    result[-1] = 0.0
+    return ", ".join(f"{value:.6f}".rstrip("0").rstrip(".") for value in result)
 
 
 def generate_seed():
@@ -165,6 +191,8 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
                 clip = w.load_clip(te["qwen_3vl_4b"], type="krea2")
             case Arch.qwen2:
                 clip = w.load_clip(te["qwen_3vl_8b"], type="qwen_image")
+            case Arch.h3:
+                clip = w.load_clip(te["qwen_3vl_32b"], type="minimax")
             case _:
                 raise RuntimeError(f"No text encoder for model architecture {arch.name}")
 
@@ -181,7 +209,14 @@ def load_checkpoint_with_lora(w: ComfyWorkflow, checkpoint: CheckpointInput, mod
         model = w.easy_cache(model, arch)
 
     for lora in checkpoint.loras:
-        model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
+        if arch is Arch.h3:
+            # P-H3 / H3-Image LoRAs are model only; routing them through the CLIP loader breaks them.
+            if "LoraLoaderBypassModelOnly" in w.node_defs:
+                model = w.load_lora_model_bypass(model, lora.name, lora.strength)
+            else:
+                model = w.load_lora_model(model, lora.name, lora.strength)
+        else:
+            model, clip = w.load_lora(model, clip, lora.name, lora.strength, lora.strength)
 
     if arch is Arch.sd3:
         model = w.model_sampling_sd3(model)
@@ -1183,6 +1218,278 @@ def refine(
     return w
 
 
+h3_manual_schedulers = ("manual", "p-h3", "distilled")
+
+
+def _h3_negative(w: ComfyWorkflow, cond: Conditioning, clip, vae, extent: Extent, sampling):
+    """Second conditioning for CFG. The node has no negative input, so it gets an empty prompt."""
+    if sampling.cfg_scale <= 1.0:
+        return None
+    text = cond.negative.prepare(w) if cond.negative is not None else ""
+    negative, _ = w.h3_conditioning(clip.model, vae, text, extent)
+    return negative
+
+
+def _h3_sampler(sampling: SamplingInput, models: ModelDict):
+    """Use the requested sampler when ComfyUI has it, otherwise the distilled default."""
+    available = models.all.node_inputs.options("KSamplerSelect", "sampler_name")
+    default = "euler" if models.arch is Arch.h3 else "er_sde"
+    return sampling.sampler if sampling.sampler in available else default
+
+
+def _h3_sample(
+    w: ComfyWorkflow,
+    model: Output,
+    prompt: Output,
+    negative: Output | None,
+    latent: Output,
+    sampling: SamplingInput,
+    extent: Extent,
+    models: ModelDict,
+):
+    """Everything here is the user's choice; recommended values are documented in MINIMAX_H3.md.
+
+    Scheduler "manual" is the distilled 8-step schedule the model ships with. Any other scheduler
+    is passed through to ComfyUI, as are the sampler and the step count. CFG > 1 adds a second
+    conditioning node and a CFGGuider.
+    """
+    if negative is not None:
+        guider = w.cfg_guider(model, ConditioningOutput(prompt, negative), sampling.cfg_scale)
+    else:
+        guider = w.basic_guider(model, prompt)
+    if sampling.scheduler.lower() in h3_manual_schedulers:
+        sigmas_node = w.manual_sigmas(h3_agenda(sampling.total_steps))
+    else:
+        sigmas_node = w.scheduler_sigmas(
+            model,
+            sampling.scheduler,
+            sampling.total_steps,
+            models.arch,
+            extent,
+            denoise=sampling.denoise_strength,
+        )
+    return w.add(
+        "SamplerCustomAdvanced",
+        output_count=2,
+        noise=w.random_noise(sampling.seed),
+        guider=guider,
+        sampler=w.sampler_select(_h3_sampler(sampling, models)),
+        sigmas=sigmas_node,
+        latent_image=latent,
+    )[1]
+
+
+def generate_h3(
+    w: ComfyWorkflow,
+    checkpoint: CheckpointInput,
+    extent: ScaledExtent,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """MiniMax H3 text-to-image. With reference layers it becomes reference-to-image (REF2VA).
+
+    There is no canvas to edit, so the first reference becomes <Picture 1> and the rest are
+    <Picture 2>..<Picture 9>: the model builds the subject from them as the prompt describes.
+    Sampler/scheduler/steps/CFG are free; see MINIMAX_H3.md.
+    """
+    _h3_no_regions(cond)
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_merge_guide(len(references)))
+        source, extra = references[0], references[1:]
+        prompt, latent = _h3_prepare(
+            w, clip.model, vae, positive, extent.initial, source, models, extra
+        )
+    else:
+        prompt, latent = w.h3_conditioning(clip.model, vae, positive, extent.initial)
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    latent = w.batch_latent(latent, misc.batch_count)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+    out_image = scale_to_target(extent, w, out_image, models)
+    w.send_image(out_image)
+    return w
+
+
+def refine_h3(
+    w: ComfyWorkflow,
+    image: Image,
+    extent: ScaledExtent,
+    checkpoint: CheckpointInput,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """P-H3 Image edit: the current canvas is <Picture 1>, reference layers follow.
+
+    Without references this is plain image-to-image; with them the conditioning switches to REF2VA
+    and the prompt is prefixed so the canvas keeps winning over the references.
+    """
+    _h3_no_regions(cond)
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+    in_image = w.load_image(image)
+    in_image = scale_to_initial(extent, w, in_image, models)
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_edit_guide())
+    prompt, latent = _h3_prepare(
+        w, clip.model, vae, positive, extent.initial, in_image, models, references
+    )
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    latent = w.batch_latent(latent, misc.batch_count)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+    out_image = scale_to_target(extent, w, out_image, models)
+    w.send_image(out_image)
+    return w
+
+
+def _h3_no_regions(cond: Conditioning):
+    if len(cond.regions) > 0:
+        raise PluginError(_("MiniMax H3 does not support region layers. Use a selection instead."))
+
+
+# H3ImagePrepare takes <Picture 1> (the image being edited) plus eight reference sockets.
+h3_max_references = 8
+
+# H3 regenerates whole 2x2 latent patches, i.e. 32x32 px with the 16x VAE, and a mask pixel switches
+# on its entire cell. Masks are therefore rounded to this grid before grow/feather.
+h3_mask_grid = 32
+
+
+def _h3_references(w: ComfyWorkflow, cond: Conditioning) -> list[Output]:
+    """Reference layers in drawing order; they become <Picture 2>..<Picture 9>.
+
+    H3 has no IP-Adapter: the references travel inside the conditioning, so they are collected
+    here instead of being applied to the model.
+    """
+    images = [c.image.load(w) for c in cond.all_control if c.mode.is_ip_adapter]
+    if len(images) > h3_max_references:
+        raise PluginError(
+            _("MiniMax H3 takes at most 8 reference layers. Merge some of them into one image.")
+        )
+    return images
+
+
+def _h3_edit_guide() -> str:
+    """Make <image_1> win over the references.
+
+    The node tells the model to copy a trait from the picture it is assigned to, so a loose
+    instruction ("lilac hair like <Picture 2>") also drags the reference's outfit and background
+    along; measured, the output became the reference instead of the edit.
+    """
+    # `<Picture 1>` is spelled out with its role, and instructions that name no picture are said to
+    # refer to it, so the prompt does not have to mention the canvas at all.
+    # No "outfit" in the preserved list: clothing is the most common thing to change, and listing it
+    # made the model keep the canvas outfit even when the instruction asked for the reference one.
+    # Nothing is listed as "preserved": naming pose/background/outfit here contradicted every
+    # instruction that changes them and the model obeyed the list instead of the prompt.
+    return (
+        "Edit <image_1>, the image currently on the canvas. The instruction refers to <image_1> "
+        "unless it names another picture. Apply exactly the changes it asks for and leave the rest of "
+        "<Picture 1> unchanged; take nothing from another picture except what the instruction assigns "
+        "to it."
+    )
+
+
+def _h3_merge_guide(picture_count: int) -> str:
+    """There is no canvas to preserve, so the references are the subject and the description rules."""
+    pictures = ", ".join(f"<image_{index}>" for index in range(1, picture_count + 1))
+    return f"Create one finished still image that takes its subject from {pictures}, as described."
+
+
+def _h3_prepend(w: ComfyWorkflow, prompt: str | Output, guide: str) -> str | Output:
+    if isinstance(prompt, str):
+        return f"{guide}\n\n{prompt}" if prompt else guide
+    if "StringConcatenate" in w.node_defs:
+        return w.add("StringConcatenate", 1, string_a=f"{guide}\n\n", string_b=prompt, delimiter="")
+    return prompt  # an already encoded prompt (translation node) cannot be prefixed safely
+
+
+def _h3_prepare(
+    w: ComfyWorkflow,
+    clip: Output,
+    vae: Output,
+    prompt: str | Output,
+    extent: Extent,
+    image: Output | None,
+    models: ModelDict,
+    references: list[Output] | None = None,
+) -> tuple[Output, Output]:
+    """Build the H3 conditioning and its latent.
+
+    The image (if any) becomes <image_1>; references follow as <image_2>..
+    """
+    if image is not None:
+        return w.h3_conditioning(clip, vae, prompt, extent, image=image, references=references)
+    return w.h3_conditioning(clip, vae, prompt, extent, references=references)
+
+
+def inpaint_h3(
+    w: ComfyWorkflow,
+    images: ImageInput,
+    checkpoint: CheckpointInput,
+    cond: Conditioning,
+    sampling: SamplingInput,
+    params: InpaintParams,
+    misc: MiscParams,
+    models: ModelDict,
+):
+    """MiniMax H3 edit limited to a selection.
+
+    The conditioning node hands the sampler an empty latent and injects the canvas as a reference,
+    so a mask alone has nothing to preserve and the model re-composes the whole crop. Seed the
+    latent from the canvas with `VAEEncode` and attach the selection with `SetLatentNoiseMask`
+    instead: the sampler then pins every step's output outside the mask to that latent, so only the
+    selection is regenerated and nothing has to be cropped or pasted back.
+    """
+    _h3_no_regions(cond)
+    extent = ScaledExtent.from_input(images.extent)
+
+    model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
+
+    in_image = w.load_image(ensure(images.initial_image))
+    in_image = scale_to_initial(extent, w, in_image, models)
+    in_mask = w.load_mask(ensure(images.hires_mask))
+    inpaint_mask = apply_grow_feather(w, in_mask, params)
+    inpaint_mask = scale_to_initial(extent, w, inpaint_mask, models, is_mask=True)
+    inpaint_mask = w.stabilize_mask(inpaint_mask)
+
+    latent = w.vae_encode(vae, in_image)
+    # The audio/video checkpoints read the second stream of the latent, so a plain tensor from
+    # VAEEncode crashes them. This node wraps it as (video, zeros_audio) for those checkpoints and
+    # passes it through untouched for the one-frame image ones.
+    if "H3LatentForModel" in w.node_defs:
+        latent = w.add("H3LatentForModel", 1, model=model, samples=latent)
+    latent = w.set_latent_noise_mask(latent, inpaint_mask)
+
+    positive = cond.positive.prepare(w, cond.style_prompt)
+    references = _h3_references(w, cond)
+    if references:
+        positive = _h3_prepend(w, positive, _h3_edit_guide())
+    prompt, _ = _h3_prepare(
+        w, clip.model, vae, positive, extent.initial, in_image, models, references
+    )
+    negative = _h3_negative(w, cond, clip, vae, extent.initial, sampling)
+    out_latent = _h3_sample(w, model, prompt, negative, latent, sampling, extent.initial, models)
+    out_image = vae_decode(w, vae, out_latent, checkpoint.tiled_vae)
+
+    out_image = w.color_match(out_image, in_image, inpaint_mask, misc.color_match)
+    out_image = w.scale_image(out_image, extent.target)
+    out_image = w.nsfw_filter(out_image, sensitivity=misc.nsfw_filter)
+
+    w.send_image(out_image)
+    return w
+
+
 def refine_region(
     w: ComfyWorkflow,
     images: ImageInput,
@@ -1519,6 +1826,7 @@ _layer_replace = {
     Arch.flux2_9b: "image {}",
     Arch.qwen_e_p: "Picture {}",
     Arch.qwen2: "<image{}>",
+    Arch.h3: "<image_{}>",
 }
 _control_instructions = {
     ControlMode.style: "Apply the style from {}.",
@@ -1782,8 +2090,20 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     workflow = ComfyWorkflow(models.node_inputs, comfy_mode)
     layer_count = i.images.layer_count if i.images else 1
     misc = MiscParams(i.batch_count, layer_count, i.color_match, i.nsfw_filter)
+    # Plain upscaling and control maps carry no checkpoint, so only sampling jobs know the arch.
+    is_h3 = i.models is not None and i.models.version is Arch.h3
 
     if i.kind is WorkflowKind.generate:
+        if is_h3:
+            return generate_h3(
+                workflow,
+                ensure(i.models),
+                ScaledExtent.from_input(i.extent),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return generate(
             workflow,
             ensure(i.models),
@@ -1794,6 +2114,17 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.inpaint:
+        if is_h3:
+            return inpaint_h3(
+                workflow,
+                ensure(i.images),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                ensure(i.inpaint),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return inpaint(
             workflow,
             ensure(i.images),
@@ -1806,6 +2137,17 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine:
+        if is_h3:
+            return refine_h3(
+                workflow,
+                i.image,
+                ScaledExtent.from_input(i.extent),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return refine(
             workflow,
             i.image,
@@ -1817,6 +2159,18 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             models.for_arch(ensure(i.models).version),
         )
     elif i.kind is WorkflowKind.refine_region:
+        if is_h3:
+            # H3 cannot denoise a masked region in place, so treat it like a selection.
+            return inpaint_h3(
+                workflow,
+                ensure(i.images),
+                ensure(i.models),
+                Conditioning.from_input(ensure(i.conditioning), i.sampling),
+                ensure(i.sampling),
+                ensure(i.inpaint),
+                misc,
+                models.for_arch(ensure(i.models).version),
+            )
         return refine_region(
             workflow,
             ensure(i.images),

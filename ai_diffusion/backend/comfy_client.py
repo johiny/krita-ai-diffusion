@@ -756,7 +756,9 @@ def _find_text_encoder_models(model_list: Sequence[str]):
         "qwen_3_8b",
         "qwen_3vl_4b",
         "qwen_3vl_8b",
+        "qwen_3vl_32b",
         "ministral",
+        "minimax",
     ]
     return {
         resource_id(kind, Arch.all, te): _find_model(model_list, kind, Arch.all, te) for te in tes

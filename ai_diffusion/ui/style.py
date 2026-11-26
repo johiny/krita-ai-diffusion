@@ -30,7 +30,7 @@ from ..files import File, FileFilter, FileFormat, FileSource
 from ..localization import translate as _
 from ..model.root import root
 from ..settings import ServerMode, Setting, settings
-from ..style import SamplerPresets, Style, Styles, StyleSettings
+from ..style import SamplerPresets, Style, Styles, StyleSettings, h3_sampler_preset
 from . import theme
 from .settings_widgets import (
     ComboBoxSetting,
@@ -493,6 +493,7 @@ class SamplerWidget(QWidget):
 
         expander = ExpanderButton(title, self)
 
+        self._h3_mode = False
         self._preset = QComboBox(self)
         self._preset.addItems(SamplerPresets.instance().names())
         self._preset.setMinimumWidth(230)
@@ -551,11 +552,20 @@ class SamplerWidget(QWidget):
         self._update_info()
         self.notify_changed()
 
+    def set_h3_mode(self, enabled: bool):
+        """MiniMax H3: every knob stays free; the info line shows the recommended values."""
+        self._h3_mode = enabled
+        self._update_info()
+
     def _update_info(self):
         preset = self.preset
         text = "<b>" + _("Sampler") + f":</b> {preset.sampler} / {preset.scheduler}"
         if preset.lora:
             text += f" +LoRA '{preset.lora}'"
+        if self._h3_mode:
+            text += " · " + _(
+                "recommended: 8 steps, er_sde, manual schedule, CFG 1.0 · strength is ignored"
+            )
         self._sampler_info.setText(text)
 
     def _open_user_presets(self):
@@ -566,6 +576,12 @@ class SamplerWidget(QWidget):
 
     def notify_changed(self):
         self.value_changed.emit()
+
+    def apply_preset(self, name: str):
+        """Switch to a preset without emitting changes (callers write the style themselves)."""
+        with SignalBlocker(self):
+            self._preset.setCurrentText(name)
+            self._select_preset(self._preset.currentIndex())
 
     def read(self, style: Style):
         self._preset.setCurrentText(getattr(style, f"{self.prefix}sampler"))
@@ -701,6 +717,13 @@ class StylePresets(SettingsTab):
         resolution_check = self._resolution_spin.add_checkbox(_("Override"))
         resolution_check.toggled.connect(self._toggle_preferred_resolution)
 
+        self._h3_resolution_spin = self._style_widgets["h3_target_resolution"] = SpinBoxSetting(
+            StyleSettings.h3_target_resolution, self, 0, 20, step=1
+        )
+        self._h3_resolution_spin.value_changed.connect(self.write)
+        self._layout.addWidget(self._h3_resolution_spin)
+        self._h3_resolution_spin.setVisible(False)  # only for H3, and only when expanded
+
         self._zsnr = add(
             "v_prediction_zsnr", SwitchSetting(StyleSettings.v_prediction_zsnr, parent=self)
         )
@@ -715,6 +738,7 @@ class StylePresets(SettingsTab):
             self._vae,
             self._clip_skip,
             self._resolution_spin,
+            self._h3_resolution_spin,
             self._zsnr,
             self._sag,
         ]
@@ -912,8 +936,14 @@ class StylePresets(SettingsTab):
             self._clip_skip.value = 0
 
     def _toggle_checkpoint_advanced(self, checked: bool):
+        self._checkpoint_advanced_expanded = checked
         for widget in self._checkpoint_advanced_widgets:
             widget.visible = checked
+        # H3 resolution spin: only visible when expanded AND H3
+        if hasattr(self, "_h3_resolution_spin"):
+            arch = resolve_arch(self.current_style, root.connection.client_if_connected)
+            is_h3 = arch in (Arch.h3, Arch.h3)
+            self._h3_resolution_spin.setVisible(checked and is_h3)
 
     def _show_builtin_info(self, style: Style):
         is_builtin = Styles.list().is_builtin(style)
@@ -945,10 +975,15 @@ class StylePresets(SettingsTab):
             self._arch_select.set_items([(e.value, e.name) for e in valid_archs])
             if self.current_style.architecture in valid_archs:
                 self._arch_select.value = self.current_style.architecture
+        is_h3 = arch in (Arch.h3, Arch.h3)
+        self._default_sampler.set_h3_mode(is_h3)
+        self._live_sampler.set_h3_mode(is_h3)
         self._clip_skip_check.setEnabled(arch.supports_clip_skip)
         self._clip_skip.enabled = arch.supports_clip_skip and self.current_style.clip_skip > 0
         self._zsnr.enabled = arch.supports_attention_guidance
         self._sag.enabled = arch.supports_attention_guidance
+        expanded = getattr(self, "_checkpoint_advanced_expanded", False)
+        self._h3_resolution_spin.setVisible(expanded and is_h3)
 
     def _read_style(self, style: Style):
         with self._write_guard:
@@ -979,6 +1014,13 @@ class StylePresets(SettingsTab):
                 setattr(style, name, widget.value)
         style.loras = self._loras.value
         self._write_checkpoint(style)
+        # MiniMax H3 defaults to its distilled schedule; any other preset is respected as-is.
+        arch = resolve_arch(style, root.connection.client_if_connected)
+        if arch is Arch.h3:
+            if style.sampler == StyleSettings.sampler.default:
+                self._default_sampler.apply_preset(h3_sampler_preset)
+            if style.live_sampler == StyleSettings.live_sampler.default:
+                self._live_sampler.apply_preset(h3_sampler_preset)
         self._default_sampler.write(style)
         self._live_sampler.write(style)
         self._enable_checkpoint_advanced()

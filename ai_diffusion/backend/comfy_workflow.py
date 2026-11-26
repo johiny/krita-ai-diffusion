@@ -382,7 +382,12 @@ class ComfyWorkflow:
         steps=20,
         arch=Arch.sdxl,
         extent: Extent | None = None,
+        denoise=1.0,
     ):
+        if scheduler == "manual":
+            # Sentinel used by the MiniMax H3 preset; other architectures need a real scheduler.
+            log.warning("Scheduler 'manual' is only supported by MiniMax H3, using 'normal'")
+            scheduler = "normal"
         if scheduler in ("align_your_steps", "ays"):
             assert arch is Arch.sd15 or arch.is_sdxl_like
 
@@ -396,7 +401,7 @@ class ComfyWorkflow:
                 output_count=1,
                 steps=steps,
                 model_type=model_type,
-                denoise=1.0,
+                denoise=denoise,
             )
         elif scheduler == "gits":
             return self.add(
@@ -441,7 +446,7 @@ class ComfyWorkflow:
                 model=model,
                 scheduler=scheduler,
                 steps=steps,
-                denoise=1.0,
+                denoise=denoise,
             )
 
     def split_sigmas(self, sigmas: Output, step=0):
@@ -454,6 +459,43 @@ class ComfyWorkflow:
 
     def basic_guider(self, model: Output, positive: Output):
         return self.add("BasicGuider", 1, model=model, conditioning=positive)
+
+    def h3_sigma_shift(self, model: Output, shift_video=1.0, shift_audio=1.0):
+        return self.add(
+            "MiniMaxH3SigmaShift", 1, model=model, shift_video=shift_video, shift_audio=shift_audio
+        )
+
+    def manual_sigmas(self, sigmas: str):
+        return self.add("ManualSigmas", 1, sigmas=sigmas)
+
+    def h3_conditioning(
+        self,
+        clip: Output,
+        vae: Output,
+        prompt: str | Output,
+        extent: Extent,
+        image: Output | None = None,
+        references: list[Output] | None = None,
+    ):
+        """Official MiniMax H3-Image conditioning (MiniMaxH3ImageConditioning).
+
+        Returns (conditioning, latent). Reference images are flattened as
+        ``images.image_N`` keys (autogrow inputs); the first picture is the one
+        being generated/edited, the rest are references. The VAE is passed so
+        reference images are anchored as latents as well as read by the text
+        encoder. No prompt upsampler is chained: the request goes in verbatim.
+        """
+        args: dict[str, Any] = {
+            "clip": clip,
+            "prompt": prompt,
+            "width": extent.width,
+            "height": extent.height,
+            "vae": vae,
+        }
+        images = ([image] if image is not None else []) + list(references or [])
+        for index, picture in enumerate(images, start=1):
+            args[f"images.image_{index}"] = picture
+        return self.add("MiniMaxH3ImageConditioning", 2, **args)
 
     def cfg_guider(self, model: Output, cond: ConditioningOutput, cfg=7.0):
         return self.add(
@@ -553,6 +595,16 @@ class ComfyWorkflow:
     def load_lora_model(self, model: Output, lora_name: str, strength: float):
         return self.add(
             "LoraLoaderModelOnly", 1, model=model, lora_name=lora_name, strength_model=strength
+        )
+
+    def load_lora_model_bypass(self, model: Output, lora_name: str, strength: float):
+        """Load LoRA (Bypass, Model Only) - what P-H3-Image LoRAs expect."""
+        return self.add(
+            "LoraLoaderBypassModelOnly",
+            1,
+            model=model,
+            lora_name=lora_name,
+            strength_model=strength,
         )
 
     def load_lora(self, model: Output, clip: Output, lora_name, strength_model, strength_clip):

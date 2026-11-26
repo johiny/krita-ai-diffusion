@@ -547,6 +547,64 @@ class Image:
         return cls._mask_op(lhs, rhs, QPainter.CompositionMode.CompositionMode_SourceOver)
 
     @staticmethod
+    def snap_mask_to_grid(image: Image, grid: int = 32):
+        """Round a mask to whole cells, the way MiniMax H3 consumes masks.
+
+        H3 reduces the mask to its 16x latent and keeps the maximum of every 2x2 patch, so a single
+        painted pixel switches on the whole 32x32 cell. Rounding the border to cell edges here makes
+        the regenerated area the one the user selected instead of up to a cell larger.
+
+        Pure-Qt implementation to avoid requiring numpy in Krita's embedded Python.
+        Processes row-by-row for efficiency (reads each scanline once).
+        """
+        from PyQt6.QtGui import QImage, QPainter, QColor
+
+        src = image._qimage
+        if src.format() != QImage.Format.Format_Grayscale8:
+            src = src.convertToFormat(QImage.Format.Format_Grayscale8)
+
+        w, h = src.width(), src.height()
+        dst = QImage(w, h, QImage.Format.Format_Grayscale8)
+        dst.fill(0)
+
+        # Number of cell columns
+        n_cols = (w + grid - 1) // grid
+        n_rows = (h + grid - 1) // grid
+
+        # Track which cells are on (n_rows x n_cols)
+        cells = [[False] * n_cols for _ in range(n_rows)]
+
+        # Process each row once
+        for y in range(h):
+            line = src.scanLine(y)
+            if line is None:
+                continue
+            ptr = line.asstring(w)
+            row_band = y // grid
+            for col in range(n_cols):
+                x0 = col * grid
+                x1 = min(x0 + grid, w)
+                if not cells[row_band][col]:
+                    for b in ptr[x0:x1]:
+                        if b >= 128:
+                            cells[row_band][col] = True
+                            break
+
+        # Fill on cells
+        for row_band in range(n_rows):
+            for col in range(n_cols):
+                if cells[row_band][col]:
+                    y0 = row_band * grid
+                    y1 = min(y0 + grid, h)
+                    x0 = col * grid
+                    x1 = min(x0 + grid, w)
+                    painter = QPainter(dst)
+                    painter.fillRect(x0, y0, x1 - x0, y1 - y0, QColor(255, 255, 255))
+                    painter.end()
+
+        return Image(dst)
+
+    @staticmethod
     def compare(img_a: Image, img_b: Image):
         assert extent_equal(img_a._qimage, img_b._qimage)
         import numpy as np
