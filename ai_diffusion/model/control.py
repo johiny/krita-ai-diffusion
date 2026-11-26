@@ -45,8 +45,6 @@ class ControlLayer(QObject, ObservableProperties):
     use_custom_strength = Property(False, persist=True, setter="set_use_custom_strength")
     ref_mode = Property("cs", persist=True)
     ref_layout = Property("separate", persist=True)
-    ref_fidelity = Property(1.0, persist=True)
-    ref_influence = Property(0.0, persist=True)
     is_supported = Property(True)
     is_pose_vector = Property(False)
     can_generate = Property(True)
@@ -63,8 +61,6 @@ class ControlLayer(QObject, ObservableProperties):
     use_custom_strength_changed = pyqtSignal(bool)
     ref_mode_changed = pyqtSignal(str)
     ref_layout_changed = pyqtSignal(str)
-    ref_fidelity_changed = pyqtSignal(float)
-    ref_influence_changed = pyqtSignal(float)
     is_supported_changed = pyqtSignal(bool)
     is_pose_vector_changed = pyqtSignal(bool)
     can_generate_changed = pyqtSignal(bool)
@@ -380,12 +376,6 @@ class ControlLayerList(QObject):
         control.ref_layout_changed.connect(
             lambda layout, source=control: self._sync_ref_layout(source, layout)
         )
-        control.ref_fidelity_changed.connect(
-            lambda value, source=control: self._sync_ref_fidelity(source, value)
-        )
-        control.ref_influence_changed.connect(
-            lambda value, source=control: self._sync_ref_influence(source, value)
-        )
         self._layers.append(control)
         self._refresh_support()
         self.added.emit(control)
@@ -415,15 +405,7 @@ class ControlLayerList(QObject):
         """Separate views or one packed picture: the node builds one reference set per run."""
         self._sync_ref_setting(source, "ref_layout", layout)
 
-    def _sync_ref_fidelity(self, source: ControlLayer, value: float):
-        """Trading detail for prompt freedom also covers the whole generation."""
-        self._sync_ref_setting(source, "ref_fidelity", value)
-
-    def _sync_ref_influence(self, source: ControlLayer, value: float):
-        """One log bias for the reference set, so every layer has to agree on it."""
-        self._sync_ref_setting(source, "ref_influence", value)
-
-    def _sync_ref_setting(self, source: ControlLayer, name: str, value):
+    def _sync_ref_setting(self, source: ControlLayer, name: str, value: str):
         for layer in self._layers:
             if layer is not source and layer.mode is ControlMode.reference:
                 if getattr(layer, name) != value:

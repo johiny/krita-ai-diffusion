@@ -5,7 +5,6 @@ from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -182,22 +181,6 @@ class ControlWidget(QWidget):
             _("Separate: every picture is a view of one character, each with its own strength. "
               "Side by side: one packed picture, for different characters")
         )
-        self.ref_fidelity_label = QLabel(_("Fidelity") + ":", self.extended_widget)
-        self.ref_fidelity_spin = QDoubleSpinBox(self.extended_widget)
-        self.ref_fidelity_spin.setRange(0.5, 1.0)
-        self.ref_fidelity_spin.setSingleStep(0.05)
-        self.ref_fidelity_spin.setDecimals(2)
-        self.ref_fidelity_spin.setToolTip(
-            _("1 keeps every detail of the picture; lower follows the prompt more freely")
-        )
-        self.ref_influence_label = QLabel(_("Influence") + ":", self.extended_widget)
-        self.ref_influence_spin = QDoubleSpinBox(self.extended_widget)
-        self.ref_influence_spin.setRange(-1.0, 1.0)
-        self.ref_influence_spin.setSingleStep(0.1)
-        self.ref_influence_spin.setDecimals(2)
-        self.ref_influence_spin.setToolTip(
-            _("How much the references count overall: 0 as trained, negative counts less")
-        )
         self.range_slider = IntervalSlider(
             low=0, high=20, minimum=0, maximum=20, parent=self.extended_widget
         )
@@ -218,10 +201,6 @@ class ControlWidget(QWidget):
         slider_layout.addWidget(self.ref_mode_select, 2, 2, 1, 2)
         slider_layout.addWidget(self.ref_layout_label, 3, 0)
         slider_layout.addWidget(self.ref_layout_select, 3, 2, 1, 2)
-        slider_layout.addWidget(self.ref_fidelity_label, 4, 0)
-        slider_layout.addWidget(self.ref_fidelity_spin, 4, 1)
-        slider_layout.addWidget(self.ref_influence_label, 4, 2)
-        slider_layout.addWidget(self.ref_influence_spin, 4, 3)
         extended_layout.addLayout(slider_layout)
 
         self._update_visibility()
@@ -238,8 +217,6 @@ class ControlWidget(QWidget):
             bind(control, "strength", self.strength_slider, "value"),
             bind_combo(control, "ref_mode", self.ref_mode_select),
             bind_combo(control, "ref_layout", self.ref_layout_select),
-            bind(control, "ref_fidelity", self.ref_fidelity_spin, "value"),
-            bind(control, "ref_influence", self.ref_influence_spin, "value"),
             control.use_custom_strength_changed.connect(self._update_custom_values),
             control.strength_changed.connect(self._update_strength),
             control.start_changed.connect(self._update_range),
@@ -345,10 +322,6 @@ class ControlWidget(QWidget):
                 self.ref_mode_select,
                 self.ref_layout_label,
                 self.ref_layout_select,
-                self.ref_fidelity_label,
-                self.ref_fidelity_spin,
-                self.ref_influence_label,
-                self.ref_influence_spin,
             ):
                 # Unsupported layers keep the mode combo: a mode mismatch is what marks them
                 # unsupported, so hiding it would leave no way to fix the layer.

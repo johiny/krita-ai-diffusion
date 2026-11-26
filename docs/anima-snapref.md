@@ -73,37 +73,12 @@ Two characters are one reference: `References: Side by side`, two horizontal pic
 height, `2girls` in the prompt and the left/right position spelled out. Separate layers never keep
 the two apart, because the node has a single reference role and blends them into one subject.
 
-The packed picture is still one reference, so appearance bleeds between the two girls. What helps,
-in order of effect:
-
-1. Pictures that differ a lot (hair colour, outfit, silhouette) and do not overlap
-2. Layer order is left to right: the prompt has to name the same sides
-3. `Influence -0.3` and `Fidelity 0.85`, so the prompt governs the layout and the references only
-   the identities
-
-Example (Character & Style, no appearance in the prompt):
-
-```text
-masterpiece, best quality, score_7, safe, 2girls, the girl on the left hugging the girl on the
-right, upper body, indoors, bedroom, warm light, laughing
-```
-
 ## Recommended settings
 
 - CFG **4.5**
 - `euler` (or `er_sde`) with `simple`
 - **28–30 steps**
-- Fidelity **1.0**, weight **1.0** and influence **0.0** to start
-
-The two sliders next to the layout are the node's own levers on how much the reference counts:
-
-- **Fidelity** (`fidelity`, 0.5–1.0): 1 keeps every detail of the picture, lower lets the prompt win
-  and also makes the negative branch read the reference (about 12 % slower)
-- **Influence** (`strength`, -1.0–1.0): a log bias on the whole reference set, 0 is as trained,
-  negative counts less. With `Side by side` this is the only weight that applies, because the
-  per-layer strengths are ignored once the pictures are packed
-
-Start with `Fidelity 0.85` / `Influence -0.3` when a reference dominates the result.
+- Fidelity **1.0**, weight **1.0** to start
 - The reference is shrunk to 1 MP inside the node (`ref_megapixels`), so sending a large picture
   costs upload time but not VRAM
 
