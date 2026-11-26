@@ -96,6 +96,10 @@ class ControlInput:
     ref_mode: str = "cs"
     # Anima references: "separate" reads each picture on its own, "stitch" packs them side by side
     ref_layout: str = "separate"
+    # Anima references: 1 keeps every detail of the picture, lower follows the prompt more freely
+    ref_fidelity: float = 1.0
+    # Anima references: log bias on the reference, 0 = as trained, negative counts less
+    ref_influence: float = 0.0
 
 
 @dataclass

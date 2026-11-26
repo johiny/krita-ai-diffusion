@@ -398,6 +398,11 @@ async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
         second.ref_layout = "stitch"
         assert first.ref_layout == "stitch", "the layout covers every reference layer"
 
+        second.ref_fidelity = 0.8
+        second.ref_influence = -0.3
+        assert first.ref_fidelity == pytest.approx(0.8)
+        assert first.ref_influence == pytest.approx(-0.3)
+
         # A document saved with two modes must still be caught before generating.
         first._ref_mode = "cs"
         assert first._has_conflicting_reference_mode()

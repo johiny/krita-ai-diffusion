@@ -197,6 +197,39 @@ def test_stitched_references_are_packed_by_the_node():
     assert not nodes_of(w, "ImageStitch"), "the node packs them itself"
 
 
+def test_reference_influence_starts_at_the_trained_defaults():
+    w, _ = build([ADAPTER], count=1)
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert node["inputs"]["fidelity"] == pytest.approx(1.0)
+    assert node["inputs"]["strength"] == pytest.approx(0.0)
+
+
+def test_fidelity_and_influence_reach_the_node():
+    models = make_models([ADAPTER])
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
+    layers = [
+        workflow.Control.from_input(
+            ControlInput(
+                ControlMode.reference,
+                Image.create(Extent(64, 64)),
+                1.0,
+                ref_fidelity=0.7,
+                ref_influence=-0.4,
+            )
+        )
+    ]
+
+    workflow.apply_anima_references(
+        w, model, layers, workflow.Clip(clip, Arch.anima), vae, models
+    )
+
+    (_, node) = nodes_of(w, "SnapRef")[0]
+    assert node["inputs"]["fidelity"] == pytest.approx(0.7)
+    assert node["inputs"]["strength"] == pytest.approx(-0.4)
+
+
 def test_a_reference_with_zero_strength_is_left_out():
     w, models, model, clip, vae, layers = _reference_layers((1.0, 0.0))
 

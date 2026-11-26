@@ -360,11 +360,21 @@ class Control:
     range: tuple[float, float] = (0.0, 1.0)
     ref_mode: str = "cs"
     ref_layout: str = "separate"
+    ref_fidelity: float = 1.0
+    ref_influence: float = 0.0
 
     @staticmethod
     def from_input(i: ControlInput):
         return Control(
-            i.mode, ImageOutput(i.image), None, i.strength, i.range, i.ref_mode, i.ref_layout
+            i.mode,
+            ImageOutput(i.image),
+            None,
+            i.strength,
+            i.range,
+            i.ref_mode,
+            i.ref_layout,
+            i.ref_fidelity,
+            i.ref_influence,
         )
 
 
@@ -795,6 +805,8 @@ def apply_anima_references(
         weights,
         reference_layers[0].ref_mode,
         reference_layers[0].ref_layout,
+        reference_layers[0].ref_fidelity,
+        reference_layers[0].ref_influence,
     )
 
 

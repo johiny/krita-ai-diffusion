@@ -961,6 +961,8 @@ class ComfyWorkflow:
         weights: list[float] | None = None,
         mode: str = "cs",
         layout: str = "separate",
+        fidelity: float = 1.0,
+        influence: float = 0.0,
     ):
         """Reference adapter for Anima: keeps the reference K/V of every block for the sampler.
 
@@ -979,9 +981,10 @@ class ComfyWorkflow:
             "mode": mode,
             "ref_in_uncond": False,
             "ref_megapixels": 1.0,
+            "strength": influence,
             "multi_layout": layout,
             "weight_1": weights[0],
-            "fidelity": 1.0,
+            "fidelity": fidelity,
         }
         if len(images) > 1:
             inputs["image_2"] = images[1]
