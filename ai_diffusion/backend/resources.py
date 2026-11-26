@@ -66,14 +66,17 @@ required_custom_nodes = [
     ),
 ]
 
+# Optional: seeds a real latent so a MiniMax H3 selection edit has something to preserve.
+h3_masked_latent = CustomNode(
+    "MiniMax H3 Masked Latent",
+    "comfyui-h3-masked-latent",
+    "https://github.com/johiny/comfyui-h3-masked-latent",
+    "58f0d4e314b99db801946f909e0002397592e243",
+    ["H3LatentForModel"],
+)
+
 optional_custom_nodes = [
-    CustomNode(
-        "MiniMax H3 Masked Latent",
-        "comfyui-h3-masked-latent",
-        "https://github.com/johiny/comfyui-h3-masked-latent",
-        "58f0d4e314b99db801946f909e0002397592e243",
-        ["H3LatentForModel"],
-    ),
+    h3_masked_latent,
     CustomNode(
         "GGUF",
         "ComfyUI-GGUF",

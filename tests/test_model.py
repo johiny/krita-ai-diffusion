@@ -276,6 +276,87 @@ async def test_generate_inpaint(workflows_dir: Path):
         assert float(mask_arr.max()) > 0.99, "hires_mask should have fully-selected pixels"
 
 
+def _paint_with_selection(krita_doc: MockKritaDocument):
+    """Fill the canvas with a solid colour and select a 256×256 square in the centre."""
+    bg_bgra = bytes([200, 0, 0, 255]) * 512 * 512  # BGRA: B=200 G=0 R=0 A=255
+    krita_doc.rootNode().childNodes()[0].setPixelData(QByteArray(bg_bgra), 0, 0, 512, 512)
+    sel = Selection()
+    sel.setPixelData(QByteArray(bytes([0xFF] * 256 * 256)), 128, 128, 256, 256)
+    krita_doc.setSelection(sel)
+
+
+@qtapp
+async def test_h3_selection_warns_when_masked_latent_is_missing(workflows_dir: Path):
+    """H3 selection edits seed the sampler with a real latent, which only the video/audio
+    checkpoints choke on. Without the optional node the job would die inside the sampler, so the
+    model must name the missing package instead."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        assert "H3LatentForModel" not in client.models.node_inputs
+        model.generate()
+        await _wait_for_enqueue(client)
+
+        assert model.error.kind is ErrorKind.warning
+        assert "MiniMax H3 Masked Latent" in model.error.message
+        assert "comfyui-h3-masked-latent" in model.error.message
+
+
+@qtapp
+async def test_h3_selection_is_quiet_when_masked_latent_is_installed(workflows_dir: Path):
+    """With the node installed there is nothing to warn about."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        client.models.node_inputs.nodes["H3LatentForModel"] = {"input": {"required": {}}}
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        model.generate()
+        await _wait_for_enqueue(client)
+
+        assert model.error.kind is not ErrorKind.warning
+
+
+@qtapp
+async def test_h3_warning_only_fires_once_per_session(workflows_dir: Path):
+    """Two selection edits without the node must not stack two identical warnings."""
+    krita_doc = Krita.instance().openDocument("test")
+    _paint_with_selection(krita_doc)
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints["test_h3.safetensors"] = CheckpointInfo(
+            "test_h3.safetensors", Arch.h3
+        )
+        model.style = _make_style("test_h3.safetensors")
+        model.strength = 1.0
+        model.regions.positive = "a white cloud"
+
+        model.generate()
+        await _wait_for_enqueue(client)
+        first = model.error.message
+        model.clear_error()
+        model.generate()
+        await _wait_for_enqueue(client, count=2)
+
+        assert model.error.kind is not ErrorKind.warning, "warning repeated on the second edit"
+        assert model._h3_edit_node_warned
+        assert "MiniMax H3 Masked Latent" in first
+
+
 @qtapp
 async def test_generate_batch(workflows_dir: Path):
     """With batch_count=8 and a wildcard prompt, DocumentModel.generate should enqueue 8 separate jobs.
