@@ -217,7 +217,15 @@ class ControlLayer(QObject, ObservableProperties):
                     self.error_text = _("The server is missing the ClipVision model") + f" {search}"
                     is_supported = False
 
-            if self.mode.is_ip_adapter and models.arch.supports_edit:
+            if self.mode is ControlMode.reference and models.arch is Arch.anima:
+                has_adapter = resources.find_snapref_adapter(client.models.loras) is not None
+                is_supported = has_adapter
+                self.error_text = (
+                    ""
+                    if has_adapter
+                    else _("The server is missing the SnapRef adapter for Anima references")
+                )
+            elif self.mode.is_ip_adapter and models.arch.supports_edit:
                 is_supported = True  # Reference images are merged into the conditioning context
             elif self.mode.is_ip_adapter and models.ip_adapter.find(self.mode) is None:
                 search_path = resources.search_path(ResourceKind.ip_adapter, models.arch, self.mode)

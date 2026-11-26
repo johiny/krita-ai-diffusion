@@ -48,7 +48,14 @@ from .comfy_workflow import (
     Output,
 )
 from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
-from .resources import Arch, ControlMode, ResourceId, ResourceKind, UpscalerName
+from .resources import (
+    Arch,
+    ControlMode,
+    ResourceId,
+    ResourceKind,
+    UpscalerName,
+    find_snapref_adapter,
+)
 
 
 def detect_inpaint_mode(extent: Extent, area: Bounds):
@@ -734,6 +741,33 @@ def apply_style_models(
     return cond
 
 
+def apply_anima_references(
+    w: ComfyWorkflow,
+    model: Output,
+    control_layers: list[Control],
+    clip: Output,
+    vae: Output,
+    models: ModelDict,
+    adapter: str | None = None,
+):
+    """Wrap the Anima model with SnapRef for every reference control layer.
+
+    SnapRef keeps the reference K/V of each block, so the weight is linear (1 = as trained).
+    """
+    if models.arch is not Arch.anima:
+        return model
+    reference_layers = [c for c in control_layers if c.mode is ControlMode.reference]
+    if not reference_layers:
+        return model
+    adapter = adapter or find_snapref_adapter(models.all.loras)
+    if adapter is None:
+        return model  # the control layer reports the missing adapter
+    for control in reference_layers:
+        image = control.image.load(w)
+        model = w.apply_snapref(model, clip, vae, image, adapter, weight=control.strength)
+    return model
+
+
 def apply_ip_adapter(
     w: ComfyWorkflow,
     model: Output,
@@ -918,6 +952,7 @@ def generate(
 ):
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = apply_ip_adapter(w, model, cond.control, models)
+    model = apply_anima_references(w, model, cond.control, clip, vae, models)
     model_orig = copy(model)
     model, regions = apply_attention_mask(w, model, cond, clip, extent.initial)
     model = apply_regional_ip_adapter(w, model, cond.regions, extent.initial, models)
@@ -1099,6 +1134,7 @@ def inpaint(
     in_image = fill_masked(w, in_image, fill_mask, params.fill, models, extent.initial)
 
     model = apply_ip_adapter(w, model, cond_base.control, models)
+    model = apply_anima_references(w, model, cond_base.control, clip, vae, models)
     model = apply_regional_ip_adapter(w, model, cond_base.regions, extent.initial, models)
     prompt, latent = encode_prompt(w, cond_base, clip, vae, regions, in_image, checkpoint.tiled_vae)
     model, prompt = apply_control(
@@ -1199,6 +1235,7 @@ def refine(
 ):
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = apply_ip_adapter(w, model, cond.control, models)
+    model = apply_anima_references(w, model, cond.control, clip, vae, models)
     model, regions = apply_attention_mask(w, model, cond, clip, extent.initial)
     model = apply_regional_ip_adapter(w, model, cond.regions, extent.initial, models)
     in_image = w.load_image(image, alpha=models.arch.supports_alpha)
@@ -1505,6 +1542,7 @@ def refine_region(
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = w.differential_diffusion(model)
     model = apply_ip_adapter(w, model, cond.control, models)
+    model = apply_anima_references(w, model, cond.control, clip, vae, models)
     model_orig = copy(model)
     model, regions = apply_attention_mask(w, model, cond, clip, extent.initial)
     model = apply_regional_ip_adapter(w, model, cond.regions, extent.initial, models)
@@ -1669,6 +1707,7 @@ def upscale_tiled(
 
     model, clip, vae = load_checkpoint_with_lora(w, checkpoint, models.all)
     model = apply_ip_adapter(w, model, cond.control, models)
+    model = apply_anima_references(w, model, cond.control, clip, vae, models)
 
     in_image = w.load_image(image)
     if upscale.model:

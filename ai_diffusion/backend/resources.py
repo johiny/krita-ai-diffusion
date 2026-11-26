@@ -762,6 +762,16 @@ def verify_model_integrity(base_dir: Path | None = None):
             verified.add(model.file_id)
 
 
+def find_snapref_adapter(loras: list[str]) -> str | None:
+    """Name of the SnapRef adapter among the server's loras, if any."""
+    candidates = [name for name in loras if "snapref" in name.lower()]
+    if not candidates:
+        return None
+    # Prefer the character adapter over the style-only one when both are installed
+    candidates.sort(key=lambda name: (0 if "v2a" in name.lower() else 1, name))
+    return candidates[0]
+
+
 def search_path(kind: ResourceKind, arch: Arch, identifier: ControlMode | UpscalerName | str):
     return search_paths.get(resource_id(kind, arch, identifier), None)
 

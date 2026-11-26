@@ -951,6 +951,32 @@ class ComfyWorkflow:
             attn_mask=mask,
         )
 
+    def apply_snapref(
+        self,
+        model: Output,
+        clip: Output,
+        vae: Output,
+        image: Output,
+        adapter: str,
+        weight: float = 1.0,
+        mode: str = "cs",
+    ):
+        """Reference adapter for Anima: keeps the reference K/V of every block for the sampler."""
+        return self.add(
+            "SnapRef",
+            1,
+            model=model,
+            clip=clip,
+            vae=vae,
+            image=image,
+            adapter=adapter,
+            mode=mode,
+            ref_in_uncond=False,
+            ref_megapixels=1.0,
+            weight_1=weight,
+            fidelity=1.0,
+        )
+
     def apply_ip_adapter_face(
         self,
         model: Output,
