@@ -394,6 +394,38 @@ async def test_reference_layers_must_agree_on_the_mode(workflows_dir: Path):
         second.ref_mode = "style"
         assert first._has_conflicting_reference_mode()
         assert second._has_conflicting_reference_mode()
+
+        assert first._reference_layer_count() == 2
+        second.strength = 0
+        assert first._reference_layer_count() == 1, "a muted layer never reaches the node"
+        await asyncio.sleep(0)
+
+
+@qtapp
+async def test_more_than_three_references_need_the_stitch_node(workflows_dir: Path):
+    """SnapRef reads three pictures; the rest are packed with a ComfyUI node, so check it exists."""
+    from ai_diffusion.backend.comfy_workflow import ComfyObjectInfo
+
+    anima = "anima-base-v1.0.safetensors"
+    krita_doc = Krita.instance().openDocument("test")
+
+    async with _model_env(krita_doc, workflows_dir) as (model, client):
+        client.models.checkpoints[anima] = CheckpointInfo(anima, Arch.anima)
+        client.models.node_inputs = ComfyObjectInfo({})
+        client.models.loras = ["snapref_v2s_pre1_fp8.safetensors"]
+        model.style = _make_style(anima)
+
+        for _ in range(3):
+            layer = model.regions.control.emplace()
+            assert layer is not None
+            layer.mode = ControlMode.reference
+        assert all(layer.is_supported for layer in model.regions.control)
+
+        fourth = model.regions.control.emplace()
+        assert fourth is not None
+        fourth.mode = ControlMode.reference
+        assert not fourth.is_supported
+        assert "ImageStitch" in fourth.error_text
         await asyncio.sleep(0)
 
 

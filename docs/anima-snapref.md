@@ -89,6 +89,7 @@ and the left/right position in the prompt. Horizontal pictures score better.
 | `The server is missing the SnapRef adapter for Anima references` | No lora with `snapref` in the name, or the `snapref` package is not installed |
 | `The SnapRef adapter cannot read the reference this way: <adapter>` | The chosen adapter has no branch for that mode (`v2a` has no style) |
 | `Reference layers must all use the same Reference mode` | Two reference layers with different modes |
+| `The server cannot pack more than three references: ImageStitch` | More than three references on a ComfyUI build without the core `ImageStitch` node |
 | `Server error: Object of type Arch is not JSON serializable` | A `Clip` reached the node inputs |
 | Reference ignored, graph has one `SnapRef` | Every layer has strength 0, or the model is not Anima |
 

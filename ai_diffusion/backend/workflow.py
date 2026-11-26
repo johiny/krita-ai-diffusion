@@ -49,6 +49,7 @@ from .comfy_workflow import (
 )
 from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
 from .resources import (
+    SNAPREF_REFERENCES,
     Arch,
     ControlMode,
     ResourceId,
@@ -778,7 +779,7 @@ def apply_anima_references(
         return model
     images = [image for image, _ in references]
     weights = [weight for _, weight in references]
-    if len(images) > 3:
+    if len(images) > SNAPREF_REFERENCES:
         # The node reads three pictures; pack the rest side by side, the way the author feeds a
         # multi-view reference. A packed picture carries one weight, so the per-layer one is lost.
         images, weights = [w.image_stitch(images, match_image_size=True)], [1.0]

@@ -16,6 +16,7 @@ from ..backend.resources import (
     ResourceKind,
     find_snapref_adapter,
     resource_id,
+    snapref_can_pack,
     snapref_mode_supported,
 )
 from ..image import BlendMode, Bounds, Extent, Image
@@ -217,6 +218,18 @@ class ControlLayer(QObject, ObservableProperties):
     def refresh_support(self):
         self._update_is_supported()
 
+    def _reference_layer_count(self) -> int:
+        """Layers that will reach the node: muted ones are dropped before the graph is built."""
+        try:
+            siblings = self._model.regions.control
+        except Exception:
+            return 0
+        return sum(
+            1
+            for other in siblings
+            if other.mode is ControlMode.reference and other.strength > 0
+        )
+
     def _has_conflicting_reference_mode(self):
         """SnapRef reads one way per generation, so all reference layers have to agree."""
         try:
@@ -264,6 +277,14 @@ class ControlLayer(QObject, ObservableProperties):
                     is_supported = False
                 elif self._has_conflicting_reference_mode():
                     self.error_text = _("Reference layers must all use the same Reference mode")
+                    is_supported = False
+                elif not snapref_can_pack(
+                    client.models.node_inputs, self._reference_layer_count()
+                ):
+                    self.error_text = (
+                        _("The server cannot pack more than three references")
+                        + ": ImageStitch"
+                    )
                     is_supported = False
                 else:
                     self.error_text = ""
@@ -348,6 +369,7 @@ class ControlLayerList(QObject):
         control.mode_changed.connect(self._update_last_mode)
         control.ref_mode_changed.connect(self._refresh_support)
         self._layers.append(control)
+        self._refresh_support()
         self.added.emit(control)
 
     def emplace(self):
@@ -360,6 +382,7 @@ class ControlLayerList(QObject):
 
         for i, c in enumerate(self._layers):
             c.index = i
+        self._refresh_support()
 
     def to_api(self, bounds: Bounds | None = None, time: int | None = None):
         for layer in (c for c in self._layers if not c.is_supported):

@@ -294,6 +294,15 @@ def test_the_widest_adapter_is_picked_without_asking():
     assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], {}) == STYLE_ADAPTER
 
 
+def test_packing_needs_the_core_stitch_node():
+    without_stitch = {"SnapRef": {}}
+
+    assert resources.snapref_can_pack(without_stitch, 1)
+    assert resources.snapref_can_pack(without_stitch, resources.SNAPREF_REFERENCES)
+    assert not resources.snapref_can_pack(without_stitch, resources.SNAPREF_REFERENCES + 1)
+    assert resources.snapref_can_pack({"ImageStitch": {}}, resources.SNAPREF_REFERENCES + 1)
+
+
 def test_unknown_adapter_modes_do_not_block_the_layer():
     modes = {ADAPTER: ["cs", "char"]}
 
