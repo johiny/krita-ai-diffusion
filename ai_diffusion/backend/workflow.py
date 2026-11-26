@@ -357,10 +357,14 @@ class Control:
     mask: ImageOutput | None = None
     strength: float = 1.0
     range: tuple[float, float] = (0.0, 1.0)
+    ref_adapter: str = ""
+    ref_mode: str = "cs"
 
     @staticmethod
     def from_input(i: ControlInput):
-        return Control(i.mode, ImageOutput(i.image), None, i.strength, i.range)
+        return Control(
+            i.mode, ImageOutput(i.image), None, i.strength, i.range, i.ref_adapter, i.ref_mode
+        )
 
 
 class Clip(NamedTuple):
@@ -764,7 +768,15 @@ def apply_anima_references(
         return model  # the control layer reports the missing adapter
     for control in reference_layers:
         image = control.image.load(w)
-        model = w.apply_snapref(model, clip, vae, image, adapter, weight=control.strength)
+        model = w.apply_snapref(
+            model,
+            clip,
+            vae,
+            image,
+            control.ref_adapter or adapter,
+            weight=control.strength,
+            mode=control.ref_mode,
+        )
     return model
 
 

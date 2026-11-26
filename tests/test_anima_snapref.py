@@ -113,6 +113,28 @@ def test_character_adapter_wins_over_the_style_one():
     assert snapref["inputs"]["adapter"] == ADAPTER
 
 
+def test_explicit_adapter_and_mode_override_the_defaults():
+    models = make_models([ADAPTER, STYLE_ADAPTER])
+    w = ComfyWorkflow(node_defs=models.node_inputs)
+    model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
+    layer = workflow.Control.from_input(
+        ControlInput(
+            ControlMode.reference,
+            Image.create(Extent(64, 64)),
+            1.0,
+            (0.0, 1.0),
+            STYLE_ADAPTER,
+            "style",
+        )
+    )
+
+    model = workflow.apply_anima_references(w, model, [layer], clip, vae, models)
+
+    (_, snapref) = nodes_of(w, "SnapRef")[0]
+    assert snapref["inputs"]["adapter"] == STYLE_ADAPTER
+    assert snapref["inputs"]["mode"] == "style"
+
+
 def test_without_an_adapter_the_model_is_untouched():
     w, model = build([], count=1)
 

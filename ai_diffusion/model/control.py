@@ -35,6 +35,8 @@ class ControlLayer(QObject, ObservableProperties):
     start = Property(0.0, persist=True)
     end = Property(1.0, persist=True)
     use_custom_strength = Property(False, persist=True, setter="set_use_custom_strength")
+    ref_adapter = Property("", persist=True)
+    ref_mode = Property("cs", persist=True)
     is_supported = Property(True)
     is_pose_vector = Property(False)
     can_generate = Property(True)
@@ -135,7 +137,9 @@ class ControlLayer(QObject, ObservableProperties):
         if self.mode.is_lines or self.mode is ControlMode.stencil:
             image.make_opaque(background=Qt.GlobalColor.white)
 
-        if self.mode.is_ip_adapter:
+        if self.mode.is_ip_adapter and self._model.arch is Arch.anima:
+            pass  # SnapRef reads the reference at its own resolution, keep the layer pixels
+        elif self.mode.is_ip_adapter:
             if self._model.arch.supports_edit:
                 if image.extent.height > extent.height:
                     w = (image.extent.width * extent.height) // image.extent.height
@@ -144,7 +148,9 @@ class ControlLayer(QObject, ObservableProperties):
                 image = Image.scale(image, self.clip_vision_extent)
 
         strength = self.strength / self.strength_multiplier
-        return ControlInput(self.mode, image, strength, (self.start, self.end))
+        return ControlInput(
+            self.mode, image, strength, (self.start, self.end), self.ref_adapter, self.ref_mode
+        )
 
     def generate_segmentation(self):
         assert self.mode is ControlMode.segmentation
@@ -218,7 +224,10 @@ class ControlLayer(QObject, ObservableProperties):
                     is_supported = False
 
             if self.mode is ControlMode.reference and models.arch is Arch.anima:
-                has_adapter = resources.find_snapref_adapter(client.models.loras) is not None
+                available = [name for name in client.models.loras if "snapref" in name.lower()]
+                has_adapter = (
+                    self.ref_adapter in available if self.ref_adapter else bool(available)
+                )
                 is_supported = has_adapter
                 self.error_text = (
                     ""
