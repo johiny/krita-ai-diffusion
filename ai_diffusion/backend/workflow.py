@@ -763,7 +763,9 @@ def apply_anima_references(
     reference_layers = [c for c in control_layers if c.mode is ControlMode.reference]
     if not reference_layers:
         return model
-    adapter = adapter or find_snapref_adapter(models.all.loras)
+    adapter = adapter or find_snapref_adapter(
+        models.all.loras, models.all.snapref_adapters
+    )
     if adapter is None:
         return model  # the control layer reports the missing adapter
     clip_output = clip.model if isinstance(clip, Clip) else clip

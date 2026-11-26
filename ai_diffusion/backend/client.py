@@ -214,6 +214,8 @@ class ClientModels:
         self.vae: list[str] = []
         self.loras: list[str] = []
         self.upscalers: list[str] = []
+        # SnapRef adapter name -> modes it can read ("cs", "char", "style")
+        self.snapref_adapters: dict[str, list[str]] = {}
         # Schema-derived info about the RTX VSR node, None when it is not installed
         self.rtx_vsr: dict[str, Any] | None = None
         self.node_inputs = ComfyObjectInfo({})
@@ -228,6 +230,7 @@ class ClientModels:
         models.vae = data.get("vae", [])
         models.loras = data.get("loras", [])
         models.upscalers = data.get("upscalers", [])
+        models.snapref_adapters = data.get("snapref_adapters", {})
         models.rtx_vsr = data.get("rtx_vsr")
         models.resources = data.get("resources", {})
         return models

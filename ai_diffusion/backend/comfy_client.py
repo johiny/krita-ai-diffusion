@@ -253,6 +253,7 @@ class ComfyClient(Client):
             yield status
             diffusion_models.update(result)
         self._refresh_models(nodes, checkpoints, diffusion_models)
+        self.models.snapref_adapters = await self._discover_snapref_adapters()
 
         # Check supported base models and make sure there is at least one
         self._supported_archs = {ver: self._check_workload(ver) for ver in Arch.list()}
@@ -264,6 +265,22 @@ class ComfyClient(Client):
             raise MissingResources(self._supported_archs)
 
         _ensure_supported_style(self)
+
+    async def _discover_snapref_adapters(self) -> dict[str, list[str]]:
+        """Which modes each SnapRef adapter can read; empty when the package is not installed."""
+        try:
+            data = await self._requests.get(f"{self.url}/snapref/adapters", timeout=10)
+        except Exception as e:
+            log.debug(f"SnapRef adapter info not available: {e}")
+            return {}
+        adapters = (data or {}).get("adapters") if isinstance(data, dict) else None
+        if not isinstance(adapters, dict):
+            return {}
+        return {
+            str(name): [str(m) for m in (info or {}).get("modes", [])]
+            for name, info in adapters.items()
+            if isinstance(info, dict)
+        }
 
     async def refresh(self):
         async for __ in self.discover_models(refresh=True):

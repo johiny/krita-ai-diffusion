@@ -37,9 +37,14 @@ def node_defs() -> ComfyObjectInfo:
     )
 
 
-def make_models(loras: list[str], arch: Arch = Arch.anima) -> ModelDict:
+def make_models(
+    loras: list[str],
+    arch: Arch = Arch.anima,
+    adapters: dict[str, list[str]] | None = None,
+) -> ModelDict:
     client_models = ClientModels()
     client_models.loras = list(loras)
+    client_models.snapref_adapters = dict(adapters or {})
     client_models.node_inputs = node_defs()
     return ModelDict(client_models, ResourceKind.checkpoint, arch)
 
@@ -53,8 +58,14 @@ def reference_layers(count: int, strength: float = 1.0) -> list[workflow.Control
     ]
 
 
-def build(loras: list[str], count: int, arch: Arch = Arch.anima, strength: float = 1.0):
-    models = make_models(loras, arch)
+def build(
+    loras: list[str],
+    count: int,
+    arch: Arch = Arch.anima,
+    strength: float = 1.0,
+    adapters: dict[str, list[str]] | None = None,
+):
+    models = make_models(loras, arch, adapters)
     w = ComfyWorkflow(node_defs=models.node_inputs)
     model, clip, vae = w.add("CheckpointLoaderSimple", 3, ckpt_name=ANIMA)
     # The real builder hands over the Clip wrapper, which carries the arch with it.
@@ -115,8 +126,16 @@ def test_several_reference_layers_chain():
     assert str(model.node) == second[0]
 
 
-def test_character_adapter_wins_over_the_style_one():
-    w, _ = build([STYLE_ADAPTER, ADAPTER], count=1)
+def test_the_default_adapter_is_the_one_that_reads_style():
+    modes = {ADAPTER: ["cs", "char"], STYLE_ADAPTER: ["cs", "char", "style"]}
+    w, _ = build([ADAPTER, STYLE_ADAPTER], count=1, adapters=modes)
+
+    (_, snapref) = nodes_of(w, "SnapRef")[0]
+    assert snapref["inputs"]["adapter"] == STYLE_ADAPTER
+
+
+def test_without_adapter_metadata_the_first_one_is_used():
+    w, _ = build([ADAPTER, STYLE_ADAPTER], count=1)
 
     (_, snapref) = nodes_of(w, "SnapRef")[0]
     assert snapref["inputs"]["adapter"] == ADAPTER
@@ -173,6 +192,24 @@ def test_adapter_detection_ignores_unrelated_loras():
     assert resources.find_snapref_adapter([]) is None
     assert resources.find_snapref_adapter([ADAPTER]) == ADAPTER
     assert resources.find_snapref_adapter([STYLE_ADAPTER]) == STYLE_ADAPTER
+
+
+def test_the_adapter_that_reads_style_is_preferred():
+    modes = {ADAPTER: ["cs", "char"], STYLE_ADAPTER: ["cs", "char", "style"]}
+
+    # v2a sorts first by name, but only v2s can also serve a style reference.
+    assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], modes) == STYLE_ADAPTER
+    assert resources.find_snapref_adapter([ADAPTER], modes) == ADAPTER
+    assert resources.find_snapref_adapter([ADAPTER, STYLE_ADAPTER], {}) == ADAPTER
+
+
+def test_unknown_adapter_modes_do_not_block_the_layer():
+    modes = {ADAPTER: ["cs", "char"]}
+
+    assert resources.snapref_mode_supported(modes, ADAPTER, "char")
+    assert not resources.snapref_mode_supported(modes, ADAPTER, "style")
+    assert resources.snapref_mode_supported({}, ADAPTER, "style")
+    assert resources.snapref_mode_supported({ADAPTER: []}, ADAPTER, "style")
 
 
 def test_generate_graph_is_serializable_with_a_reference_layer():

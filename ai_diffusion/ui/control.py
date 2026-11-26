@@ -177,12 +177,6 @@ class ControlWidget(QWidget):
         self.ref_mode_select.setToolTip(
             _("What the reference provides: the character, the art style, or both")
         )
-        for value, text in (
-            ("cs", _("Character & Style")),
-            ("char", _("Character")),
-            ("style", _("Style")),
-        ):
-            self.ref_mode_select.addItem(text, value)
         self._update_ref_adapters()
         self.range_slider = IntervalSlider(
             low=0, high=20, minimum=0, maximum=20, parent=self.extended_widget
@@ -230,6 +224,7 @@ class ControlWidget(QWidget):
             control.has_range_changed.connect(self._update_visibility),
             control.can_generate_changed.connect(self._update_visibility),
             control.mode_changed.connect(self._update_visibility),
+            control.ref_adapter_changed.connect(self._update_ref_modes),
             control.is_pose_vector_changed.connect(self._update_pose_utils),
             root.active_model.style_changed.connect(self._update_visibility),
         ]
@@ -269,17 +264,43 @@ class ControlWidget(QWidget):
         adapters = (
             [name for name in client.models.loras if "snapref" in name.lower()] if client else []
         )
-        if [combo.itemData(i) for i in range(combo.count())] == adapters:
-            return
-        combo.blockSignals(True)
-        combo.clear()
-        for name in adapters:
-            combo.addItem(name, name)
-        combo.blockSignals(False)
-        if control.ref_adapter in adapters:
-            combo.setCurrentIndex(adapters.index(control.ref_adapter))
-        elif adapters:
-            control.ref_adapter = find_snapref_adapter(adapters) or adapters[0]
+        if [combo.itemData(i) for i in range(combo.count())] != adapters:
+            combo.blockSignals(True)
+            combo.clear()
+            for name in adapters:
+                combo.addItem(name, name)
+            combo.blockSignals(False)
+            if control.ref_adapter in adapters:
+                combo.setCurrentIndex(adapters.index(control.ref_adapter))
+            elif adapters:
+                known = client.models.snapref_adapters if client else {}
+                control.ref_adapter = find_snapref_adapter(adapters, known) or adapters[0]
+        self._update_ref_modes()
+
+    def _update_ref_modes(self):
+        control = self._control
+        combo = self.ref_mode_select
+        client = root.connection.client_if_connected
+        adapters = client.models.snapref_adapters if client else {}
+        modes = adapters.get(control.ref_adapter, [])  # empty means the adapter did not say
+        items = (
+            ("cs", _("Character & Style")),
+            ("char", _("Character")),
+            ("style", _("Style")),
+        )
+        available = [value for value, _text in items if not modes or value in modes]
+        if [combo.itemData(i) for i in range(combo.count())] != available:
+            combo.blockSignals(True)
+            combo.clear()
+            for value, text in items:
+                if value in available:
+                    combo.addItem(text, value)
+            combo.blockSignals(False)
+        values = [combo.itemData(i) for i in range(combo.count())]
+        if control.ref_mode in values:
+            combo.setCurrentIndex(values.index(control.ref_mode))
+        elif values:
+            control.ref_mode = values[0]
 
     def _update_visibility(self):
         self._update_ref_adapters()

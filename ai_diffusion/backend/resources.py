@@ -762,14 +762,34 @@ def verify_model_integrity(base_dir: Path | None = None):
             verified.add(model.file_id)
 
 
-def find_snapref_adapter(loras: list[str]) -> str | None:
-    """Name of the SnapRef adapter among the server's loras, if any."""
+def find_snapref_adapter(
+    loras: list[str], adapters: dict[str, list[str]] | None = None
+) -> str | None:
+    """Name of the SnapRef adapter to use when a layer does not name one.
+
+    An adapter reports which modes it can read. Prefer one that also reads the art style, so
+    switching the reference mode later never needs an adapter swap.
+    """
     candidates = [name for name in loras if "snapref" in name.lower()]
     if not candidates:
         return None
-    # Prefer the character adapter over the style-only one when both are installed
-    candidates.sort(key=lambda name: (0 if "v2a" in name.lower() else 1, name))
+    if adapters:
+        style_capable = [name for name in candidates if "style" in adapters.get(name, [])]
+        if style_capable:
+            return style_capable[0]
     return candidates[0]
+
+
+def snapref_mode_supported(
+    adapters: dict[str, list[str]], adapter: str, mode: str
+) -> bool:
+    """Whether the adapter can read the reference that way.
+
+    Adapters that do not report their modes must not be blocked: only a known list that lacks
+    the mode is a reason to refuse.
+    """
+    modes = adapters.get(adapter)
+    return not modes or mode in modes
 
 
 def search_path(kind: ResourceKind, arch: Arch, identifier: ControlMode | UpscalerName | str):

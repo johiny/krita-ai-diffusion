@@ -10,7 +10,14 @@ from PyQt6.QtGui import QColor
 from .. import util
 from ..backend import resources
 from ..backend.api import ControlInput
-from ..backend.resources import Arch, ControlMode, ResourceKind, resource_id
+from ..backend.resources import (
+    Arch,
+    ControlMode,
+    ResourceKind,
+    find_snapref_adapter,
+    resource_id,
+    snapref_mode_supported,
+)
 from ..image import BlendMode, Bounds, Extent, Image
 from ..layer import Layer, LayerType
 from ..localization import translate as _
@@ -227,15 +234,21 @@ class ControlLayer(QObject, ObservableProperties):
 
             if self.mode is ControlMode.reference and models.arch is Arch.anima:
                 available = [name for name in client.models.loras if "snapref" in name.lower()]
-                has_adapter = (
-                    self.ref_adapter in available if self.ref_adapter else bool(available)
-                )
-                is_supported = has_adapter
-                self.error_text = (
-                    ""
-                    if has_adapter
-                    else _("The server is missing the SnapRef adapter for Anima references")
-                )
+                adapters = client.models.snapref_adapters
+                chosen = self.ref_adapter or find_snapref_adapter(available, adapters)
+                is_supported = chosen is not None
+                if chosen is None:
+                    self.error_text = _(
+                        "The server is missing the SnapRef adapter for Anima references"
+                    )
+                elif not snapref_mode_supported(adapters, chosen, self.ref_mode):
+                    self.error_text = (
+                        _("The SnapRef adapter cannot read the reference this way")
+                        + f": {chosen}"
+                    )
+                    is_supported = False
+                else:
+                    self.error_text = ""
             elif self.mode.is_ip_adapter and models.arch.supports_edit:
                 is_supported = True  # Reference images are merged into the conditioning context
             elif self.mode.is_ip_adapter and models.ip_adapter.find(self.mode) is None:
